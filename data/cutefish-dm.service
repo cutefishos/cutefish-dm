@@ -1,0 +1,19 @@
+[Unit]
+Description=Cutefish Display Manager
+Conflicts=getty@tty1.service
+After=getty@tty1.service systemd-user-sessions.service systemd-logind.service
+# The login screen takes over plymouth's splash, as GDM does.
+Conflicts=plymouth-quit.service
+After=plymouth-quit.service plymouth-start.service
+OnFailure=plymouth-quit.service
+
+[Service]
+ExecStart=/usr/bin/cutefish-dm
+# The daemon ends the login screen and the session itself.
+KillMode=mixed
+Restart=always
+RestartSec=1s
+EnvironmentFile=-/etc/default/locale
+
+[Install]
+Alias=display-manager.service

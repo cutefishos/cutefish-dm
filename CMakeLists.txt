@@ -1,0 +1,62 @@
+cmake_minimum_required(VERSION 3.22)
+
+project(cutefish-dm
+    VERSION 0.1.0
+    DESCRIPTION "Cutefish display manager"
+    LANGUAGES CXX
+)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+
+include(GNUInstallDirs)
+option(BUILD_TESTING "Build the test suite" OFF)
+include(CTest)
+
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core DBus Network)
+find_library(PAM_LIBRARY pam)
+if(NOT PAM_LIBRARY)
+    message(FATAL_ERROR "cutefish-dm needs libpam")
+endif()
+
+set(DM_HELPER_PATH ${CMAKE_INSTALL_FULL_LIBEXECDIR}/cutefish-dm-helper)
+set(DM_SESSION_WRAPPER ${CMAKE_INSTALL_FULL_LIBEXECDIR}/cutefish-dm-session)
+
+add_library(cutefish-dm-common STATIC common/wire.cpp)
+target_link_libraries(cutefish-dm-common PUBLIC Qt6::Core)
+
+add_executable(cutefish-dm
+    daemon/config.cpp
+    daemon/daemon.cpp
+    daemon/greeterserver.cpp
+    daemon/helperprocess.cpp
+    daemon/main.cpp
+    daemon/sessions.cpp
+    daemon/state.cpp
+    daemon/terminal.cpp
+)
+target_compile_definitions(cutefish-dm PRIVATE
+    DM_HELPER_PATH="${DM_HELPER_PATH}"
+    DM_SESSION_WRAPPER="${DM_SESSION_WRAPPER}"
+)
+target_link_libraries(cutefish-dm PRIVATE cutefish-dm-common Qt6::Core Qt6::DBus Qt6::Network)
+
+# No Qt event loop and no threads: PAM modules and the session's fork run here.
+add_executable(cutefish-dm-helper helper/main.cpp)
+target_link_libraries(cutefish-dm-helper PRIVATE cutefish-dm-common ${PAM_LIBRARY})
+
+install(TARGETS cutefish-dm DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS cutefish-dm-helper DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
+install(PROGRAMS data/cutefish-dm-session DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
+install(FILES data/cutefish-dm.service DESTINATION /usr/lib/systemd/system)
+install(FILES data/cutefish-dm.pam DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/pam.d
+        RENAME cutefish-dm)
+install(FILES data/cutefish-dm-greeter.pam DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/pam.d
+        RENAME cutefish-dm-greeter)
+install(FILES data/com.cutefish.DisplayManager.conf
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/dbus-1/system.d)
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

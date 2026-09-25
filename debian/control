@@ -1,0 +1,21 @@
+Source: cutefish-dm
+Section: x11
+Priority: optional
+Maintainer: Reion Wong <reionwong@gmail.com>
+Build-Depends: cmake (>= 3.22),
+               debhelper (>= 9),
+               qt6-base-dev (>= 6.8),
+               libpam0g-dev
+Standards-Version: 4.5.0
+Homepage: https://github.com/cutefishos
+
+Package: cutefish-dm
+Architecture: any
+Depends: adduser,
+         cutefish-compositor,
+         ${misc:Depends},
+         ${shlibs:Depends}
+Description: CutefishOS display manager
+ Runs the Cutefish login screen and the Wayland session a user logs in to,
+ Cutefish or any other desktop in wayland-sessions, and hands the display
+ between them without a black frame or the console in between.
