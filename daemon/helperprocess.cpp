@@ -1,5 +1,6 @@
 #include "helperprocess.h"
 
+#include <QDebug>
 #include <QJsonArray>
 #include <QJsonObject>
 
@@ -15,16 +16,27 @@ QString helperPath()
     return overridden.isEmpty() ? QStringLiteral(DM_HELPER_PATH) : overridden;
 }
 
+// The helper's own deadline for its session (10 s), up to 5 s for a killed
+// session's group to go, then PAM's close.
+constexpr int kStopTimeoutMs = 20000;
+
 } // namespace
 
 HelperProcess::HelperProcess(QObject* parent)
     : QObject(parent)
 {
+    m_stopDeadline.setSingleShot(true);
+    m_stopDeadline.setInterval(kStopTimeoutMs);
+    connect(&m_stopDeadline, &QTimer::timeout, this, [this] {
+        qWarning() << "The login helper did not stop; killing it";
+        m_process.kill();
+    });
     m_process.setProgram(helperPath());
     // The session's output shares the helper's stderr: the daemon's journal.
     m_process.setProcessChannelMode(QProcess::ForwardedErrorChannel);
     connect(&m_process, &QProcess::readyReadStandardOutput, this, &HelperProcess::readMessages);
     connect(&m_process, &QProcess::finished, this, [this] {
+        m_stopDeadline.stop();
         readMessages();
         if (!m_authenticated && !m_failed) {
             m_failed = true;
@@ -79,8 +91,11 @@ void HelperProcess::start(const QStringList& command, const QStringList& environ
 void HelperProcess::terminate()
 {
     // Never the session's pid itself: once reaped, another process may have it.
-    if (m_process.state() != QProcess::NotRunning)
-        m_process.terminate();
+    if (m_process.state() == QProcess::NotRunning)
+        return;
+    m_process.terminate();
+    if (!m_stopDeadline.isActive())
+        m_stopDeadline.start();
 }
 
 void HelperProcess::send(const QJsonObject& message)

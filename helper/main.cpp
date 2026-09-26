@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <optional>
@@ -30,16 +31,73 @@ constexpr size_t kMaxLine = 64 * 1024;
 // After authentication nobody answers; a session module's motd would hang.
 bool g_conversing = true;
 
+// How long a session may take over SIGTERM before its process group is killed.
+constexpr unsigned kSessionStopSeconds = 10;
+
 // The session's pid until it is reaped: unreaped, it cannot belong to anyone else.
 volatile sig_atomic_t g_session = 0;
+// From pam_open_session to the fork, a SIGTERM waits for the session to exist:
+// exiting then would leave the PAM session open.
+volatile sig_atomic_t g_opening = 0;
+volatile sig_atomic_t g_stopRequested = 0;
+volatile sig_atomic_t g_killed = 0;
 
 // SIGTERM ends the session, which this process then closes, or the login before one.
 void onTerminate(int)
 {
-    if (g_session > 0)
+    if (g_session > 0) {
         kill(pid_t(g_session), SIGTERM);
-    else
+        if (!g_stopRequested)
+            alarm(kSessionStopSeconds);
+        g_stopRequested = 1;
+    } else if (g_opening) {
+        g_stopRequested = 1;
+    } else {
         _exit(128 + SIGTERM);
+    }
+}
+
+// setsid made the session its group's leader; the group goes down with it.
+void onStopDeadline(int)
+{
+    if (g_session > 0) {
+        kill(-pid_t(g_session), SIGKILL);
+        g_killed = 1;
+    }
+}
+
+// Whether a process other than `leader` is still in its process group. Zombies
+// count: a killed process's main thread is one while its other threads still
+// hold its files.
+bool groupHasOthers(pid_t leader)
+{
+    DIR* proc = opendir("/proc");
+    if (!proc)
+        return false;
+    bool found = false;
+    while (const dirent* entry = readdir(proc)) {
+        char* end = nullptr;
+        const long pid = strtol(entry->d_name, &end, 10);
+        if (*end || pid <= 0 || pid == leader)
+            continue;
+        const std::string path = "/proc/" + std::to_string(pid) + "/stat";
+        FILE* file = fopen(path.c_str(), "re");
+        if (!file)
+            continue;
+        char buffer[512];
+        const size_t size = fread(buffer, 1, sizeof(buffer) - 1, file);
+        fclose(file);
+        buffer[size] = 0;
+        // The name may hold spaces and parentheses; the fields after it do not.
+        const char* name = strrchr(buffer, ')');
+        int group = 0;
+        if (name && sscanf(name + 1, " %*c %*d %d", &group) == 1 && group == leader) {
+            found = true;
+            break;
+        }
+    }
+    closedir(proc);
+    return found;
 }
 
 std::optional<QJsonObject> receive()
@@ -190,6 +248,8 @@ int main()
     action.sa_handler = onTerminate;
     sigemptyset(&action.sa_mask);
     sigaction(SIGTERM, &action, nullptr);
+    action.sa_handler = onStopDeadline;
+    sigaction(SIGALRM, &action, nullptr);
     // The daemon's death ends the login like its SIGTERM; no password goes to a core file.
     prctl(PR_SET_PDEATHSIG, SIGTERM);
     prctl(PR_SET_DUMPABLE, 0);
@@ -274,6 +334,7 @@ int main()
     if (!pam_getenv(pam, "PATH"))
         pam_putenv(pam, "PATH=/usr/local/bin:/usr/bin:/bin");
 
+    g_opening = 1;
     status = pam_open_session(pam, 0);
     if (status != PAM_SUCCESS) {
         fail(false, QString::fromUtf8(pam_strerror(pam, status)));
@@ -296,9 +357,12 @@ int main()
         if (null >= 0)
             dup2(null, STDIN_FILENO);
         dup2(STDERR_FILENO, STDOUT_FILENO);
-        // Not the session's: fds PAM modules left open, the ignored SIGPIPE.
+        // Not the session's: fds PAM modules left open, the ignored SIGPIPE, the
+        // stop handlers.
         close_range(3, ~0U, 0);
         signal(SIGPIPE, SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGALRM, SIG_DFL);
         if (initgroups(owner->name.c_str(), owner->gid) != 0 || setgid(owner->gid) != 0
             || setuid(owner->uid) != 0)
             _exit(127);
@@ -316,15 +380,30 @@ int main()
         return finish(PAM_SESSION_ERR);
     }
     g_session = child;
+    g_opening = 0;
+    if (g_stopRequested) {
+        g_stopRequested = 0;
+        raise(SIGTERM);
+    }
     send({{QStringLiteral("type"), QStringLiteral("started")},
           {QStringLiteral("pid"), qint64(child)},
           {QStringLiteral("session"), QString::fromUtf8(sessionId ? sessionId : "")}});
 
-    int wait = 0;
-    while (waitpid(child, &wait, 0) < 0 && errno == EINTR) {
+    // Not reaped yet, so the deadline can still only hit the session's group.
+    siginfo_t exited = {};
+    while (waitid(P_PID, id_t(child), &exited, WEXITED | WNOWAIT) < 0 && errno == EINTR) {
     }
     // The session is over; closing it is not to be cut short.
     signal(SIGTERM, SIG_IGN);
+    alarm(0);
+    // The killed leader can exit before the rest of its group, whose compositor
+    // still holds the Wayland socket's lock the next login needs.
+    for (int waited = 0; g_killed && waited < 5000 && groupHasOthers(child); waited += 20)
+        usleep(20 * 1000);
+    g_session = 0;
+    int wait = 0;
+    while (waitpid(child, &wait, 0) < 0 && errno == EINTR) {
+    }
     // Closing the PAM session needs root.
     pam_close_session(pam, 0);
     pam_setcred(pam, PAM_DELETE_CRED);

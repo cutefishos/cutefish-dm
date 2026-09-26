@@ -19,7 +19,7 @@
 namespace {
 
 // When set, the test binary is the helper: it accepts "right" and its session
-// runs until terminated.
+// runs until terminated, or, set to "stubborn", ignores SIGTERM.
 constexpr char kFakeHelper[] = "DM_TEST_FAKE_HELPER";
 
 QByteArray readLine()
@@ -57,6 +57,8 @@ int fakeHelper()
     const auto start = dm::decodeLine(readLine());
     if (!start || start->value(QStringLiteral("cmd")).toArray().isEmpty())
         return 0;
+    if (qgetenv(kFakeHelper) == "stubborn")
+        signal(SIGTERM, SIG_IGN);
     writeLine({{QStringLiteral("type"), QStringLiteral("started")},
                {QStringLiteral("pid"), qint64(getpid())},
                {QStringLiteral("session"), QStringLiteral("42")}});
@@ -312,6 +314,29 @@ private slots:
         QVERIFY(helper.hasStarted());
         helper.terminate();
         QTRY_COMPARE(finished.count(), 1);
+        qunsetenv(kFakeHelper);
+    }
+
+    void aHelperIgnoringTerminationIsKilledAtTheDeadline()
+    {
+        qputenv("CUTEFISH_DM_HELPER", QCoreApplication::applicationFilePath().toLocal8Bit());
+        qputenv(kFakeHelper, "stubborn");
+        dm::HelperProcess helper;
+        helper.setStopTimeout(300);
+        QSignalSpy questions(&helper, &dm::HelperProcess::question);
+        QSignalSpy authenticated(&helper, &dm::HelperProcess::authenticated);
+        QSignalSpy started(&helper, &dm::HelperProcess::started);
+        QSignalSpy finished(&helper, &dm::HelperProcess::finished);
+        helper.login(QStringLiteral("cutefish-dm"), QStringLiteral("alice"), true, 2);
+        QTRY_COMPARE(questions.count(), 1);
+        helper.answer(QStringLiteral("right"));
+        QTRY_COMPARE(authenticated.count(), 1);
+        helper.start({QStringLiteral("/bin/true")}, {QStringLiteral("XDG_VTNR=2")});
+        QTRY_COMPARE(started.count(), 1);
+        helper.terminate();
+        QTest::qWait(150);
+        QCOMPARE(finished.count(), 0);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 2000);
         qunsetenv(kFakeHelper);
     }
 

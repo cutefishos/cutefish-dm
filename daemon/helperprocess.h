@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QProcess>
 #include <QStringList>
+#include <QTimer>
 
 namespace dm {
 
@@ -20,8 +21,10 @@ public:
     void answer(const QJsonValue& response);
     void start(const QStringList& command, const QStringList& environment);
     // SIGTERM to the helper, which passes it on to its session, or stops the
-    // login while none runs yet.
+    // login while none runs yet. A helper still running after the stop timeout
+    // is killed, so `finished` always follows.
     void terminate();
+    void setStopTimeout(int milliseconds) { m_stopDeadline.setInterval(milliseconds); }
 
     QString user() const { return m_user; }
     bool isAuthenticated() const { return m_authenticated; }
@@ -42,6 +45,7 @@ private:
     void readMessages();
 
     QProcess m_process;
+    QTimer m_stopDeadline;
     QByteArray m_buffer;
     QString m_user;
     QString m_sessionId;
