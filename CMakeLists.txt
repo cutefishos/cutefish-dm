@@ -56,6 +56,12 @@ install(FILES data/cutefish-dm-greeter.pam DESTINATION ${CMAKE_INSTALL_FULL_SYSC
         RENAME cutefish-dm-greeter)
 install(FILES data/com.cutefish.DisplayManager.conf
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/dbus-1/system.d)
+foreach(unit pipewire.socket pipewire.service pipewire-pulse.socket pipewire-pulse.service
+        wireplumber.service filter-chain.service)
+    install(FILES data/no-greeter-audio.conf
+            DESTINATION /usr/lib/systemd/user/${unit}.d
+            RENAME cutefish-dm.conf)
+endforeach()
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
