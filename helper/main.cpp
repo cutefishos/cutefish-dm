@@ -40,6 +40,9 @@ volatile sig_atomic_t g_session = 0;
 // exiting then would leave the PAM session open.
 volatile sig_atomic_t g_opening = 0;
 volatile sig_atomic_t g_stopRequested = 0;
+// A PAM transaction is open: a stop must let the main flow end it, so the
+// credentials it established are dropped and the transaction is closed.
+volatile sig_atomic_t g_pam = 0;
 volatile sig_atomic_t g_killed = 0;
 
 // SIGTERM ends the session, which this process then closes, or the login before one.
@@ -50,7 +53,7 @@ void onTerminate(int)
         if (!g_stopRequested)
             alarm(kSessionStopSeconds);
         g_stopRequested = 1;
-    } else if (g_opening) {
+    } else if (g_opening || g_pam) {
         g_stopRequested = 1;
     } else {
         _exit(128 + SIGTERM);
@@ -106,8 +109,12 @@ std::optional<QJsonObject> receive()
     char c = 0;
     ssize_t count = 0;
     while ((count = read(STDIN_FILENO, &c, 1)) == 1 || (count < 0 && errno == EINTR)) {
-        if (count < 0)
+        if (count < 0) {
+            // SIGTERM interrupted the read: the message is not coming.
+            if (g_stopRequested)
+                return std::nullopt;
             continue;
+        }
         if (c == '\n')
             break;
         line.push_back(c);
@@ -276,7 +283,9 @@ int main()
         fail(false, QString::fromUtf8(pam_strerror(pam, status)));
         return 1;
     }
+    g_pam = 1;
     const auto finish = [&](int result) {
+        g_pam = 0;
         pam_end(pam, result);
         return 1;
     };
@@ -306,6 +315,7 @@ int main()
     const auto request = receive();
     if (!request || request->value(QStringLiteral("type")).toString() != QLatin1String("start")) {
         pam_setcred(pam, PAM_DELETE_CRED);
+        g_pam = 0;
         pam_end(pam, PAM_SUCCESS);
         return 0;
     }
@@ -373,6 +383,10 @@ int main()
         execve(arguments.front(), arguments.data(), environment);
         _exit(127);
     }
+    // The child took its copy across execve; this side is done with it.
+    for (char** variable = environment; variable && *variable; ++variable)
+        free(*variable);
+    free(environment);
     if (child < 0) {
         fail(false, QString::fromUtf8(strerror(errno)));
         pam_close_session(pam, 0);
@@ -407,6 +421,7 @@ int main()
     // Closing the PAM session needs root.
     pam_close_session(pam, 0);
     pam_setcred(pam, PAM_DELETE_CRED);
+    g_pam = 0;
     pam_end(pam, PAM_SUCCESS);
     send({{QStringLiteral("type"), QStringLiteral("finished")},
           {QStringLiteral("status"),
