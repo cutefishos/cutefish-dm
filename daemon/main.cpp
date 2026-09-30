@@ -27,7 +27,7 @@ int main(int argc, char* argv[])
     const QCommandLineOption configOption(QStringLiteral("config"),
                                           QStringLiteral("Configuration file to read."),
                                           QStringLiteral("path"),
-                                          QStringLiteral("/etc/cutefish/dm.conf"));
+                                          QStringLiteral("/etc/cutefish-dm.conf"));
     parser.addOption(configOption);
     parser.process(app);
 

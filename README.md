@@ -42,7 +42,7 @@ sudo systemctl disable sddm
 sudo systemctl enable cutefish-dm
 ```
 
-Optional settings go in `/etc/cutefish/dm.conf`; see `daemon/config.cpp`.
+Optional settings go in `/etc/cutefish-dm.conf`; see `daemon/config.cpp`.
 
 ## Tests
 
