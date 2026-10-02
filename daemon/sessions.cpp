@@ -82,7 +82,6 @@ std::optional<SessionEntry> readSessionFile(const QString& path)
     SessionEntry entry;
     entry.id = QFileInfo(path).completeBaseName();
     entry.name = unescape(keys.value(QStringLiteral("Name"), entry.id));
-    entry.comment = unescape(keys.value(QStringLiteral("Comment")));
     // Field codes have no meaning for a session and are dropped.
     for (const QString& argument : QProcess::splitCommand(unescape(keys.value(QStringLiteral("Exec"))))) {
         if (!(argument.size() == 2 && argument.startsWith(QLatin1Char('%'))))

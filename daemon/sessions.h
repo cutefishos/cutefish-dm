@@ -12,7 +12,6 @@ struct SessionEntry {
     // The file name without ".desktop", e.g. "cutefish-wayland".
     QString id;
     QString name;
-    QString comment;
     QStringList exec;
     QStringList desktopNames;
 };

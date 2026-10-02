@@ -54,8 +54,7 @@ Daemon::Daemon(Config config, QObject* parent)
     connect(&m_server, &GreeterServer::startSession, this, &Daemon::startSession);
     connect(&m_server, &GreeterServer::cancelSession, this, &Daemon::cancelSession);
     connect(&m_server, &GreeterServer::disconnected, this, [this] {
-        if (m_login && !m_login->hasStarted())
-            release(m_login);
+        release(m_login);
     });
 }
 
@@ -77,10 +76,9 @@ bool Daemon::start()
         qCritical() << "No login screen user" << m_config.greeterUser;
         return false;
     }
-    m_greeterUid = *greeter;
     QDir().mkpath(m_config.runtimeDirectory);
     const QString socket = m_config.runtimeDirectory + QStringLiteral("/greeter.sock");
-    if (!m_server.listen(socket, m_greeterUid)) {
+    if (!m_server.listen(socket, *greeter)) {
         qCritical() << "Cannot listen on" << socket;
         return false;
     }
@@ -112,8 +110,7 @@ void Daemon::startGreeter()
         m_greeter->start(m_config.greeterCommand,
                          greeterEnvironment(m_config.greeterVt, m_server.path()));
     });
-    connect(m_greeter.get(), &HelperProcess::started, this, [this](const QString& id) {
-        m_greeterSessionId = id;
+    connect(m_greeter.get(), &HelperProcess::started, this, [this] {
         if (std::exchange(m_bootSplash, false))
             QProcess::startDetached(QStringLiteral("plymouth"),
                                     {QStringLiteral("quit"), QStringLiteral("--retain-splash")});
@@ -139,7 +136,7 @@ void Daemon::showGreeter()
     whenControlled(greeter, m_config.greeterVt, [this, greeter](bool controlled) {
         if (m_greeter.get() != greeter)
             return;
-        if (controlled && activateSession(m_greeterSessionId)) {
+        if (controlled && activateSession(greeter->sessionId())) {
             replySwitchRequests(true);
             return;
         }
@@ -156,10 +153,22 @@ void Daemon::stopGreeter()
         m_greeter->terminate();
 }
 
+void Daemon::returnToGreeter()
+{
+    // A login screen that already handed a login over is replaced, not shown.
+    if (m_greeter && m_greeterSpent) {
+        m_restartGreeter = true;
+        stopGreeter();
+    } else if (m_greeter) {
+        showGreeter();
+    } else {
+        startGreeter();
+    }
+}
+
 void Daemon::onGreeterFinished()
 {
     release(m_greeter);
-    m_greeterSessionId.clear();
     restoreTextMode(m_config.greeterVt);
     if (m_stopping)
         return;
@@ -202,21 +211,12 @@ void Daemon::SwitchToGreeter(const QDBusMessage& message)
     }
     message.setDelayedReply(true);
     m_switchRequests.append(message);
-    // A login screen that already handed a login over is replaced, not shown.
-    if (m_greeter && m_greeterSpent) {
-        m_restartGreeter = true;
-        stopGreeter();
-    } else if (m_greeter) {
-        showGreeter();
-    } else {
-        startGreeter();
-    }
+    returnToGreeter();
 }
 
 void Daemon::createSession(const QString& username)
 {
-    if (m_login)
-        release(m_login);
+    release(m_login);
     m_login = std::make_unique<HelperProcess>();
     auto* login = m_login.get();
     connect(login, &HelperProcess::question, this, [this](const QString& style, const QString& text) {
@@ -285,8 +285,7 @@ void Daemon::startSession(const QStringList& command, const QStringList& environ
 
 void Daemon::cancelSession()
 {
-    if (m_login && !m_login->hasStarted())
-        release(m_login);
+    release(m_login);
     m_server.respond(GreeterServer::success());
 }
 
@@ -331,17 +330,9 @@ void Daemon::onSessionFinished()
         launchSession(std::move(*pending));
         return;
     }
-    // A session that failed before it was shown leaves a spent login screen.
-    if (m_greeter && m_greeterSpent) {
-        m_restartGreeter = true;
-        stopGreeter();
-        return;
-    }
-    // A crash, or another desktop's own logout: the login screen comes back.
-    if (m_greeter)
-        showGreeter();
-    else
-        startGreeter();
+    // A crash, another desktop's own logout, or a session that failed before
+    // it was shown: the login screen comes back.
+    returnToGreeter();
 }
 
 void Daemon::whenControlled(HelperProcess* helper, int vt, std::function<void(bool)> then)

@@ -105,6 +105,9 @@ bool groupHasOthers(pid_t leader)
 
 std::optional<QJsonObject> receive()
 {
+    // A SIGTERM taken outside read() interrupted nothing; the message is not coming.
+    if (g_stopRequested)
+        return std::nullopt;
     std::string line;
     char c = 0;
     ssize_t count = 0;
@@ -180,7 +183,7 @@ int converse(int count, const pam_message** messages, pam_response** result, voi
             continue;
         }
         QString style;
-        switch (messages[i]->msg_style) {
+        switch (kind) {
         case PAM_PROMPT_ECHO_OFF: style = QStringLiteral("secret"); break;
         case PAM_PROMPT_ECHO_ON: style = QStringLiteral("visible"); break;
         case PAM_ERROR_MSG: style = QStringLiteral("error"); break;
@@ -197,8 +200,7 @@ int converse(int count, const pam_message** messages, pam_response** result, voi
             freeResponses(responses, count);
             return PAM_CONV_ERR;
         }
-        const int prompt = messages[i]->msg_style;
-        if (prompt == PAM_PROMPT_ECHO_OFF || prompt == PAM_PROMPT_ECHO_ON) {
+        if (kind == PAM_PROMPT_ECHO_OFF || kind == PAM_PROMPT_ECHO_ON) {
             QString text = answer->value(QStringLiteral("response")).toString();
             QByteArray bytes = text.toUtf8();
             responses[i].resp = strdup(bytes.constData());
@@ -275,6 +277,8 @@ int main()
         fail(false, QStringLiteral("Incomplete login request"));
         return 1;
     }
+    // The login screen's own login has nobody to answer its PAM messages either.
+    g_conversing = authenticate;
 
     const pam_conv conversation {converse, nullptr};
     pam_handle_t* pam = nullptr;

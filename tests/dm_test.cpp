@@ -2,6 +2,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QLocalSocket>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -217,14 +218,17 @@ private slots:
     void stateRemembersTheLastLogin()
     {
         QTemporaryDir directory;
-        dm::State state(directory.filePath(QStringLiteral("state/state.conf")));
-        QVERIFY(state.lastUser().isEmpty());
+        const QString path = directory.filePath(QStringLiteral("state/state.conf"));
+        dm::State state(path);
+        QVERIFY(!QFile::exists(path));
         state.remember(QStringLiteral("alice"), QStringLiteral("gnome"));
         state.remember(QStringLiteral("bob"), QStringLiteral("cutefish-wayland"));
-        dm::State reread(directory.filePath(QStringLiteral("state/state.conf")));
-        QCOMPARE(reread.lastUser(), QStringLiteral("bob"));
-        QCOMPARE(reread.lastSession(QStringLiteral("alice")), QStringLiteral("gnome"));
-        QCOMPARE(reread.lastSession(QStringLiteral("bob")), QStringLiteral("cutefish-wayland"));
+        // The keys the login screen reads.
+        const QSettings reread(path, QSettings::IniFormat);
+        QCOMPARE(reread.value(QStringLiteral("Last/User")).toString(), QStringLiteral("bob"));
+        QCOMPARE(reread.value(QStringLiteral("Sessions/alice")).toString(), QStringLiteral("gnome"));
+        QCOMPARE(reread.value(QStringLiteral("Sessions/bob")).toString(),
+                 QStringLiteral("cutefish-wayland"));
     }
 
     void configFallsBackToDefaults()

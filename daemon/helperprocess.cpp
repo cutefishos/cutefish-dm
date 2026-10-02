@@ -57,8 +57,11 @@ HelperProcess::~HelperProcess()
 {
     disconnect(&m_process, nullptr, this, nullptr);
     if (m_process.state() != QProcess::NotRunning) {
+        // EOF ends a helper waiting for a message even when SIGTERM lands just before its read().
+        m_process.closeWriteChannel();
         terminate();
-        if (!m_process.waitForFinished(3000))
+        // A helper that may own a session gets its whole bounded stop, which ends by closing PAM.
+        if (!m_process.waitForFinished(isAuthenticated() ? m_stopDeadline.interval() : 3000))
             m_process.kill();
         m_process.waitForFinished(1000);
     }

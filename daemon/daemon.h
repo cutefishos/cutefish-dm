@@ -7,7 +7,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <sys/types.h>
 
 #include "config.h"
 #include "greeterserver.h"
@@ -40,6 +39,7 @@ private:
     void startGreeter();
     void showGreeter();
     void stopGreeter();
+    void returnToGreeter();
     void onGreeterFinished();
     void replySwitchRequests(bool switched);
 
@@ -60,11 +60,9 @@ private:
     Config m_config;
     State m_state;
     GreeterServer m_server;
-    uid_t m_greeterUid = 0;
     std::unique_ptr<HelperProcess> m_greeter;
     std::unique_ptr<HelperProcess> m_login;
     std::unique_ptr<HelperProcess> m_session;
-    QString m_greeterSessionId;
     std::optional<PendingStart> m_pendingStart;
     QList<QDBusMessage> m_switchRequests;
     QTimer m_greeterRestart;
