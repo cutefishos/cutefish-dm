@@ -15,16 +15,14 @@
 
 namespace dm {
 
-namespace {
-
 // How long the login screen or a session may take to open its display.
-constexpr int kControlTimeoutMs = 10000;
-constexpr int kControlPollMs = 20;
+static constexpr int kControlTimeoutMs = 10000;
+static constexpr int kControlPollMs = 20;
 // How long the login screen outlives the switch to a session: the kernel takes
 // its cursor down with it, and the session's replaces it once its displays settle.
-constexpr int kGreeterLingerMs = 3000;
+static constexpr int kGreeterLingerMs = 3000;
 
-std::optional<uid_t> uidOf(const QString& user)
+static std::optional<uid_t> uidOf(const QString& user)
 {
     const passwd* entry = getpwnam(user.toLocal8Bit().constData());
     if (!entry)
@@ -33,13 +31,11 @@ std::optional<uid_t> uidOf(const QString& user)
 }
 
 // As GDM does: plymouth gives up the display with its splash left on screen.
-bool bootSplashRunning()
+static bool bootSplashRunning()
 {
     const QString plymouth = QStandardPaths::findExecutable(QStringLiteral("plymouth"));
     return !plymouth.isEmpty() && QProcess::execute(plymouth, {QStringLiteral("--ping")}) == 0;
 }
-
-} // namespace
 
 Daemon::Daemon(Config config, QObject* parent)
     : QObject(parent)

@@ -8,9 +8,7 @@
 
 namespace dm {
 
-namespace {
-
-QString helperPath()
+static QString helperPath()
 {
     const QString overridden = qEnvironmentVariable("CUTEFISH_DM_HELPER");
     return overridden.isEmpty() ? QStringLiteral(DM_HELPER_PATH) : overridden;
@@ -18,9 +16,7 @@ QString helperPath()
 
 // The helper's own deadline for its session (10 s), up to 5 s for a killed
 // session's group to go, then PAM's close.
-constexpr int kStopTimeoutMs = 20000;
-
-} // namespace
+static constexpr int kStopTimeoutMs = 20000;
 
 HelperProcess::HelperProcess(QObject* parent)
     : QObject(parent)

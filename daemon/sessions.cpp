@@ -9,10 +9,8 @@
 
 namespace dm {
 
-namespace {
-
 // The escapes the Desktop Entry specification defines for string values.
-QString unescape(const QString& value)
+static QString unescape(const QString& value)
 {
     QString result;
     result.reserve(value.size());
@@ -34,19 +32,17 @@ QString unescape(const QString& value)
     return result;
 }
 
-bool isTrue(const QString& value)
+static bool isTrue(const QString& value)
 {
     return value.trimmed() == QLatin1String("true");
 }
 
-bool executableExists(const QString& program)
+static bool executableExists(const QString& program)
 {
     if (QFileInfo(program).isAbsolute())
         return QFileInfo(program).isExecutable();
     return !QStandardPaths::findExecutable(program).isEmpty();
 }
-
-} // namespace
 
 std::optional<SessionEntry> readSessionFile(const QString& path)
 {

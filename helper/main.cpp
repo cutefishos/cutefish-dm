@@ -24,29 +24,27 @@
 
 #include "../common/wire.h"
 
-namespace {
-
-constexpr size_t kMaxLine = 64 * 1024;
+static constexpr size_t kMaxLine = 64 * 1024;
 
 // After authentication nobody answers; a session module's motd would hang.
-bool g_conversing = true;
+static bool g_conversing = true;
 
 // How long a session may take over SIGTERM before its process group is killed.
-constexpr unsigned kSessionStopSeconds = 10;
+static constexpr unsigned kSessionStopSeconds = 10;
 
 // The session's pid until it is reaped: unreaped, it cannot belong to anyone else.
-volatile sig_atomic_t g_session = 0;
+static volatile sig_atomic_t g_session = 0;
 // From pam_open_session to the fork, a SIGTERM waits for the session to exist:
 // exiting then would leave the PAM session open.
-volatile sig_atomic_t g_opening = 0;
-volatile sig_atomic_t g_stopRequested = 0;
+static volatile sig_atomic_t g_opening = 0;
+static volatile sig_atomic_t g_stopRequested = 0;
 // A PAM transaction is open: a stop must let the main flow end it, so the
 // credentials it established are dropped and the transaction is closed.
-volatile sig_atomic_t g_pam = 0;
-volatile sig_atomic_t g_killed = 0;
+static volatile sig_atomic_t g_pam = 0;
+static volatile sig_atomic_t g_killed = 0;
 
 // SIGTERM ends the session, which this process then closes, or the login before one.
-void onTerminate(int)
+static void onTerminate(int)
 {
     if (g_session > 0) {
         kill(pid_t(g_session), SIGTERM);
@@ -61,7 +59,7 @@ void onTerminate(int)
 }
 
 // setsid made the session its group's leader; the group goes down with it.
-void onStopDeadline(int)
+static void onStopDeadline(int)
 {
     if (g_session > 0) {
         kill(-pid_t(g_session), SIGKILL);
@@ -72,7 +70,7 @@ void onStopDeadline(int)
 // Whether a process other than `leader` is still in its process group. Zombies
 // count: a killed process's main thread is one while its other threads still
 // hold its files.
-bool groupHasOthers(pid_t leader)
+static bool groupHasOthers(pid_t leader)
 {
     DIR* proc = opendir("/proc");
     if (!proc)
@@ -103,7 +101,7 @@ bool groupHasOthers(pid_t leader)
     return found;
 }
 
-std::optional<QJsonObject> receive()
+static std::optional<QJsonObject> receive()
 {
     // A SIGTERM taken outside read() interrupted nothing; the message is not coming.
     if (g_stopRequested)
@@ -131,7 +129,7 @@ std::optional<QJsonObject> receive()
     return message;
 }
 
-void send(const QJsonObject& message)
+static void send(const QJsonObject& message)
 {
     const QByteArray bytes = dm::encodeLine(message);
     qsizetype written = 0;
@@ -146,14 +144,14 @@ void send(const QJsonObject& message)
     }
 }
 
-void fail(bool authentication, const QString& message)
+static void fail(bool authentication, const QString& message)
 {
     send({{QStringLiteral("type"), QStringLiteral("error")},
           {QStringLiteral("auth"), authentication},
           {QStringLiteral("message"), message}});
 }
 
-void freeResponses(pam_response* responses, int count)
+static void freeResponses(pam_response* responses, int count)
 {
     for (int i = 0; i < count; ++i) {
         if (responses[i].resp) {
@@ -165,7 +163,7 @@ void freeResponses(pam_response* responses, int count)
 }
 
 // Every PAM message goes to the greeter and waits for its answer, as in greetd.
-int converse(int count, const pam_message** messages, pam_response** result, void*)
+static int converse(int count, const pam_message** messages, pam_response** result, void*)
 {
     if (count <= 0 || count > PAM_MAX_NUM_MSG)
         return PAM_CONV_ERR;
@@ -217,6 +215,8 @@ int converse(int count, const pam_message** messages, pam_response** result, voi
     return PAM_SUCCESS;
 }
 
+namespace {
+
 struct Account {
     std::string name;
     std::string home;
@@ -225,7 +225,9 @@ struct Account {
     gid_t gid = 0;
 };
 
-std::optional<Account> account(pam_handle_t* pam)
+} // namespace
+
+static std::optional<Account> account(pam_handle_t* pam)
 {
     // PAM_USER, since a module may have changed it.
     const void* item = nullptr;
@@ -237,15 +239,13 @@ std::optional<Account> account(pam_handle_t* pam)
     return Account {entry->pw_name, entry->pw_dir, entry->pw_shell, entry->pw_uid, entry->pw_gid};
 }
 
-std::vector<std::string> strings(const QJsonArray& array)
+static std::vector<std::string> strings(const QJsonArray& array)
 {
     std::vector<std::string> result;
     for (const auto& value : array)
         result.push_back(value.toString().toStdString());
     return result;
 }
-
-} // namespace
 
 int main()
 {

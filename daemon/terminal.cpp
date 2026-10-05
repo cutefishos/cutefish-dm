@@ -13,15 +13,11 @@
 
 namespace dm {
 
-namespace {
-
-int openVt(int vt)
+static int openVt(int vt)
 {
     return ::open(QStringLiteral("/dev/tty%1").arg(vt).toLocal8Bit().constData(),
                   O_RDWR | O_NOCTTY | O_CLOEXEC);
 }
-
-} // namespace
 
 bool setGraphicsMode(int vt)
 {

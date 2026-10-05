@@ -17,13 +17,11 @@
 #include "daemon/sessions.h"
 #include "daemon/state.h"
 
-namespace {
-
 // When set, the test binary is the helper: it accepts "right" and its session
 // runs until terminated, or, set to "stubborn", ignores SIGTERM.
-constexpr char kFakeHelper[] = "DM_TEST_FAKE_HELPER";
+static constexpr char kFakeHelper[] = "DM_TEST_FAKE_HELPER";
 
-QByteArray readLine()
+static QByteArray readLine()
 {
     QByteArray line;
     char c = 0;
@@ -32,14 +30,14 @@ QByteArray readLine()
     return line;
 }
 
-void writeLine(const QJsonObject& message)
+static void writeLine(const QJsonObject& message)
 {
     const QByteArray bytes = dm::encodeLine(message);
     if (write(STDOUT_FILENO, bytes.constData(), size_t(bytes.size())) != bytes.size())
         _exit(3);
 }
 
-int fakeHelper()
+static int fakeHelper()
 {
     const auto login = dm::decodeLine(readLine());
     if (!login || login->value(QStringLiteral("user")).toString() != QLatin1String("alice"))
@@ -67,19 +65,17 @@ int fakeHelper()
         pause();
 }
 
-QByteArray frame(const QJsonObject& message)
+static QByteArray frame(const QJsonObject& message)
 {
     return dm::encodeFrame(message);
 }
 
-void writeFile(const QString& path, const QByteArray& contents)
+static void writeFile(const QString& path, const QByteArray& contents)
 {
     QFile file(path);
     QVERIFY(file.open(QIODevice::WriteOnly));
     file.write(contents);
 }
-
-} // namespace
 
 class DisplayManagerTest : public QObject
 {
