@@ -11,7 +11,7 @@ class State
 public:
     explicit State(QString path);
 
-    void remember(const QString& user, const QString& session);
+    void remember(const QString &user, const QString &session);
 
 private:
     QString m_path;

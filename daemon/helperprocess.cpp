@@ -18,7 +18,7 @@ static QString helperPath()
 // session's group to go, then PAM's close.
 static constexpr int kStopTimeoutMs = 20000;
 
-HelperProcess::HelperProcess(QObject* parent)
+HelperProcess::HelperProcess(QObject *parent)
     : QObject(parent)
 {
     m_stopDeadline.setSingleShot(true);
@@ -27,9 +27,11 @@ HelperProcess::HelperProcess(QObject* parent)
         qWarning() << "The login helper did not stop; killing it";
         m_process.kill();
     });
+
     m_process.setProgram(helperPath());
     // The session's output shares the helper's stderr: the daemon's journal.
     m_process.setProcessChannelMode(QProcess::ForwardedErrorChannel);
+
     connect(&m_process, &QProcess::readyReadStandardOutput, this, &HelperProcess::readMessages);
     connect(&m_process, &QProcess::finished, this, [this] {
         m_stopDeadline.stop();
@@ -56,6 +58,7 @@ HelperProcess::~HelperProcess()
         // EOF ends a helper waiting for a message even when SIGTERM lands just before its read().
         m_process.closeWriteChannel();
         terminate();
+
         // A helper that may own a session gets its whole bounded stop, which ends by closing PAM.
         if (!m_process.waitForFinished(isAuthenticated() ? m_stopDeadline.interval() : 3000))
             m_process.kill();
@@ -63,7 +66,7 @@ HelperProcess::~HelperProcess()
     }
 }
 
-void HelperProcess::login(const QString& service, const QString& user, bool authenticate, int vt)
+void HelperProcess::login(const QString &service, const QString &user, bool authenticate, int vt)
 {
     m_user = user;
     m_process.start();
@@ -74,13 +77,13 @@ void HelperProcess::login(const QString& service, const QString& user, bool auth
           {QStringLiteral("vt"), vt}});
 }
 
-void HelperProcess::answer(const QJsonValue& response)
+void HelperProcess::answer(const QJsonValue &response)
 {
     send({{QStringLiteral("type"), QStringLiteral("answer")},
           {QStringLiteral("response"), response}});
 }
 
-void HelperProcess::start(const QStringList& command, const QStringList& environment)
+void HelperProcess::start(const QStringList &command, const QStringList &environment)
 {
     send({{QStringLiteral("type"), QStringLiteral("start")},
           {QStringLiteral("cmd"), QJsonArray::fromStringList(command)},
@@ -92,12 +95,13 @@ void HelperProcess::terminate()
     // Never the session's pid itself: once reaped, another process may have it.
     if (m_process.state() == QProcess::NotRunning)
         return;
+
     m_process.terminate();
     if (!m_stopDeadline.isActive())
         m_stopDeadline.start();
 }
 
-void HelperProcess::send(const QJsonObject& message)
+void HelperProcess::send(const QJsonObject &message)
 {
     QByteArray line = encodeLine(message);
     m_process.write(line);
@@ -107,12 +111,14 @@ void HelperProcess::send(const QJsonObject& message)
 void HelperProcess::readMessages()
 {
     m_buffer.append(m_process.readAllStandardOutput());
+
     qsizetype end = 0;
     while ((end = m_buffer.indexOf('\n')) >= 0) {
         const auto message = decodeLine(m_buffer.left(end));
         m_buffer.remove(0, end + 1);
         if (!message)
             continue;
+
         const QString type = message->value(QStringLiteral("type")).toString();
         if (type == QLatin1String("question")) {
             emit question(message->value(QStringLiteral("style")).toString(),

@@ -30,7 +30,7 @@ static QByteArray readLine()
     return line;
 }
 
-static void writeLine(const QJsonObject& message)
+static void writeLine(const QJsonObject &message)
 {
     const QByteArray bytes = dm::encodeLine(message);
     if (write(STDOUT_FILENO, bytes.constData(), size_t(bytes.size())) != bytes.size())
@@ -42,6 +42,7 @@ static int fakeHelper()
     const auto login = dm::decodeLine(readLine());
     if (!login || login->value(QStringLiteral("user")).toString() != QLatin1String("alice"))
         return 2;
+
     writeLine({{QStringLiteral("type"), QStringLiteral("question")},
                {QStringLiteral("style"), QStringLiteral("secret")},
                {QStringLiteral("text"), QStringLiteral("Password:")}});
@@ -52,25 +53,30 @@ static int fakeHelper()
                    {QStringLiteral("message"), QStringLiteral("Authentication failure")}});
         return 1;
     }
+
     writeLine({{QStringLiteral("type"), QStringLiteral("authenticated")}});
+
     const auto start = dm::decodeLine(readLine());
     if (!start || start->value(QStringLiteral("cmd")).toArray().isEmpty())
         return 0;
+
     if (qgetenv(kFakeHelper) == "stubborn")
         signal(SIGTERM, SIG_IGN);
+
     writeLine({{QStringLiteral("type"), QStringLiteral("started")},
                {QStringLiteral("pid"), qint64(getpid())},
                {QStringLiteral("session"), QStringLiteral("42")}});
+
     for (;;)
         pause();
 }
 
-static QByteArray frame(const QJsonObject& message)
+static QByteArray frame(const QJsonObject &message)
 {
     return dm::encodeFrame(message);
 }
 
-static void writeFile(const QString& path, const QByteArray& contents)
+static void writeFile(const QString &path, const QByteArray &contents)
 {
     QFile file(path);
     QVERIFY(file.open(QIODevice::WriteOnly));
@@ -103,14 +109,14 @@ private slots:
     {
         dm::FrameReader oversized;
         const quint32 length = dm::kMaxFrameSize + 1;
-        oversized.append(QByteArray(reinterpret_cast<const char*>(&length), sizeof(length)));
+        oversized.append(QByteArray(reinterpret_cast<const char *>(&length), sizeof(length)));
         QVERIFY(!oversized.next());
         QVERIFY(oversized.failed());
 
         dm::FrameReader malformed;
         const QByteArray payload("[1,2]");
         const quint32 size = quint32(payload.size());
-        malformed.append(QByteArray(reinterpret_cast<const char*>(&size), sizeof(size)) + payload);
+        malformed.append(QByteArray(reinterpret_cast<const char *>(&size), sizeof(size)) + payload);
         QVERIFY(!malformed.next());
         QVERIFY(malformed.failed());
     }
@@ -202,7 +208,7 @@ private slots:
 
         const QStringList bare = dm::sessionEnvironment(dm::SessionEntry {}, 2);
         QVERIFY(bare.contains(QStringLiteral("XDG_SESSION_TYPE=wayland")));
-        for (const QString& variable : bare)
+        for (const QString &variable : bare)
             QVERIFY(!variable.startsWith(QLatin1String("DESKTOP_SESSION=")));
 
         const QStringList greeter = dm::greeterEnvironment(1, QStringLiteral("/run/x.sock"));
@@ -302,6 +308,7 @@ private slots:
         QSignalSpy authenticated(&helper, &dm::HelperProcess::authenticated);
         QSignalSpy started(&helper, &dm::HelperProcess::started);
         QSignalSpy finished(&helper, &dm::HelperProcess::finished);
+
         helper.login(QStringLiteral("cutefish-dm"), QStringLiteral("alice"), true, 2);
         QTRY_COMPARE(questions.count(), 1);
         QCOMPARE(questions.first().first().toString(), QStringLiteral("secret"));
@@ -314,6 +321,7 @@ private slots:
         QVERIFY(helper.hasStarted());
         helper.terminate();
         QTRY_COMPARE(finished.count(), 1);
+
         qunsetenv(kFakeHelper);
     }
 
@@ -327,6 +335,7 @@ private slots:
         QSignalSpy authenticated(&helper, &dm::HelperProcess::authenticated);
         QSignalSpy started(&helper, &dm::HelperProcess::started);
         QSignalSpy finished(&helper, &dm::HelperProcess::finished);
+
         helper.login(QStringLiteral("cutefish-dm"), QStringLiteral("alice"), true, 2);
         QTRY_COMPARE(questions.count(), 1);
         helper.answer(QStringLiteral("right"));
@@ -337,6 +346,7 @@ private slots:
         QTest::qWait(150);
         QCOMPARE(finished.count(), 0);
         QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 2000);
+
         qunsetenv(kFakeHelper);
     }
 
@@ -348,6 +358,7 @@ private slots:
         QSignalSpy failed(&helper, &dm::HelperProcess::failed);
         QSignalSpy finished(&helper, &dm::HelperProcess::finished);
         QSignalSpy questions(&helper, &dm::HelperProcess::question);
+
         helper.login(QStringLiteral("cutefish-dm"), QStringLiteral("alice"), true, 2);
         QTRY_COMPARE(questions.count(), 1);
         helper.answer(QStringLiteral("wrong"));
@@ -355,14 +366,16 @@ private slots:
         QCOMPARE(failed.count(), 1);
         QVERIFY(failed.first().first().toBool());
         QVERIFY(!helper.isAuthenticated());
+
         qunsetenv(kFakeHelper);
     }
 };
 
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
     if (qEnvironmentVariableIsSet(kFakeHelper))
         return fakeHelper();
+
     QCoreApplication app(argc, argv);
     DisplayManagerTest test;
     return QTest::qExec(&test, argc, argv);

@@ -21,14 +21,14 @@ class Daemon : public QObject
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "com.cutefish.DisplayManager")
 public:
-    explicit Daemon(Config config, QObject* parent = nullptr);
+    explicit Daemon(Config config, QObject *parent = nullptr);
     ~Daemon() override;
 
     bool start();
 
 public Q_SLOTS:
     // Called by the session before it ends; replies once the login screen is up.
-    Q_SCRIPTABLE void SwitchToGreeter(const QDBusMessage& message);
+    Q_SCRIPTABLE void SwitchToGreeter(const QDBusMessage &message);
 
 private:
     struct PendingStart {
@@ -43,19 +43,19 @@ private:
     void onGreeterFinished();
     void replySwitchRequests(bool switched);
 
-    void createSession(const QString& username);
-    void postAuthMessageResponse(const QJsonValue& response);
-    void startSession(const QStringList& command, const QStringList& environment,
-                      const QString& session);
+    void createSession(const QString &username);
+    void postAuthMessageResponse(const QJsonValue &response);
+    void startSession(const QStringList &command, const QStringList &environment,
+                      const QString &session);
     void cancelSession();
     void launchSession(PendingStart start);
     void onSessionFinished();
 
     // then(true) once logind has taken `vt` for the helper's session, then(false)
     // after a timeout; nothing runs once the helper is released.
-    void whenControlled(HelperProcess* helper, int vt, std::function<void(bool)> then);
+    void whenControlled(HelperProcess *helper, int vt, std::function<void(bool)> then);
     // HelperProcess objects end in their own signals; they are released later.
-    static void release(std::unique_ptr<HelperProcess>& helper);
+    static void release(std::unique_ptr<HelperProcess> &helper);
 
     Config m_config;
     State m_state;

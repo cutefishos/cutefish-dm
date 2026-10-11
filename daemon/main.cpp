@@ -9,7 +9,7 @@
 #include "config.h"
 #include "daemon.h"
 
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
     // Through signalfd, so SIGTERM runs the daemon's teardown.
     sigset_t mask;
@@ -37,8 +37,9 @@ int main(int argc, char* argv[])
     }
 
     dm::Daemon daemon(dm::Config::load(parser.value(configOption)));
+
     if (signalFd >= 0) {
-        auto* notifier = new QSocketNotifier(signalFd, QSocketNotifier::Read, &app);
+        auto *notifier = new QSocketNotifier(signalFd, QSocketNotifier::Read, &app);
         QObject::connect(notifier, &QSocketNotifier::activated, &app, [signalFd] {
             signalfd_siginfo info;
             while (read(signalFd, &info, sizeof(info)) == sizeof(info)) {
@@ -46,7 +47,9 @@ int main(int argc, char* argv[])
             QCoreApplication::quit();
         });
     }
+
     if (!daemon.start())
         return 1;
+
     return app.exec();
 }

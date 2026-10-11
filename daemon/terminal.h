@@ -18,6 +18,6 @@ bool isControlled(int vt);
 int activeVt();
 
 // logind's ActivateSession: the VT switch plus the DRM and input handover.
-bool activateSession(const QString& sessionId);
+bool activateSession(const QString &sessionId);
 
 } // namespace dm

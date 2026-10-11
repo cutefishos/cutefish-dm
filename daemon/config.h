@@ -21,7 +21,7 @@ struct Config {
     QString runtimeDirectory = QStringLiteral("/run/cutefish-dm");
 
     // Defaults, overridden by whatever `path` sets.
-    static Config load(const QString& path = QStringLiteral("/etc/cutefish-dm.conf"));
+    static Config load(const QString &path = QStringLiteral("/etc/cutefish-dm.conf"));
 };
 
 } // namespace dm

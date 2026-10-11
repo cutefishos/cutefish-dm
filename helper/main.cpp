@@ -34,10 +34,12 @@ static constexpr unsigned kSessionStopSeconds = 10;
 
 // The session's pid until it is reaped: unreaped, it cannot belong to anyone else.
 static volatile sig_atomic_t g_session = 0;
+
 // From pam_open_session to the fork, a SIGTERM waits for the session to exist:
 // exiting then would leave the PAM session open.
 static volatile sig_atomic_t g_opening = 0;
 static volatile sig_atomic_t g_stopRequested = 0;
+
 // A PAM transaction is open: a stop must let the main flow end it, so the
 // credentials it established are dropped and the transaction is closed.
 static volatile sig_atomic_t g_pam = 0;
@@ -72,31 +74,36 @@ static void onStopDeadline(int)
 // hold its files.
 static bool groupHasOthers(pid_t leader)
 {
-    DIR* proc = opendir("/proc");
+    DIR *proc = opendir("/proc");
     if (!proc)
         return false;
+
     bool found = false;
-    while (const dirent* entry = readdir(proc)) {
-        char* end = nullptr;
+    while (const dirent *entry = readdir(proc)) {
+        char *end = nullptr;
         const long pid = strtol(entry->d_name, &end, 10);
         if (*end || pid <= 0 || pid == leader)
             continue;
+
         const std::string path = "/proc/" + std::to_string(pid) + "/stat";
-        FILE* file = fopen(path.c_str(), "re");
+        FILE *file = fopen(path.c_str(), "re");
         if (!file)
             continue;
+
         char buffer[512];
         const size_t size = fread(buffer, 1, sizeof(buffer) - 1, file);
         fclose(file);
         buffer[size] = 0;
+
         // The name may hold spaces and parentheses; the fields after it do not.
-        const char* name = strrchr(buffer, ')');
+        const char *name = strrchr(buffer, ')');
         int group = 0;
         if (name && sscanf(name + 1, " %*c %*d %d", &group) == 1 && group == leader) {
             found = true;
             break;
         }
     }
+
     closedir(proc);
     return found;
 }
@@ -106,6 +113,7 @@ static std::optional<QJsonObject> receive()
     // A SIGTERM taken outside read() interrupted nothing; the message is not coming.
     if (g_stopRequested)
         return std::nullopt;
+
     std::string line;
     char c = 0;
     ssize_t count = 0;
@@ -116,20 +124,24 @@ static std::optional<QJsonObject> receive()
                 return std::nullopt;
             continue;
         }
+
         if (c == '\n')
             break;
+
         line.push_back(c);
         if (line.size() > kMaxLine)
             return std::nullopt;
     }
+
     if (line.empty())
         return std::nullopt;
+
     const auto message = dm::decodeLine(QByteArray::fromStdString(line));
     explicit_bzero(line.data(), line.size());
     return message;
 }
 
-static void send(const QJsonObject& message)
+static void send(const QJsonObject &message)
 {
     const QByteArray bytes = dm::encodeLine(message);
     qsizetype written = 0;
@@ -140,18 +152,19 @@ static void send(const QJsonObject& message)
             continue;
         if (count <= 0)
             return;
+
         written += count;
     }
 }
 
-static void fail(bool authentication, const QString& message)
+static void fail(bool authentication, const QString &message)
 {
     send({{QStringLiteral("type"), QStringLiteral("error")},
           {QStringLiteral("auth"), authentication},
           {QStringLiteral("message"), message}});
 }
 
-static void freeResponses(pam_response* responses, int count)
+static void freeResponses(pam_response *responses, int count)
 {
     for (int i = 0; i < count; ++i) {
         if (responses[i].resp) {
@@ -159,17 +172,20 @@ static void freeResponses(pam_response* responses, int count)
             free(responses[i].resp);
         }
     }
+
     free(responses);
 }
 
 // Every PAM message goes to the greeter and waits for its answer, as in greetd.
-static int converse(int count, const pam_message** messages, pam_response** result, void*)
+static int converse(int count, const pam_message **messages, pam_response **result, void *)
 {
     if (count <= 0 || count > PAM_MAX_NUM_MSG)
         return PAM_CONV_ERR;
-    auto* responses = static_cast<pam_response*>(calloc(size_t(count), sizeof(pam_response)));
+
+    auto *responses = static_cast<pam_response *>(calloc(size_t(count), sizeof(pam_response)));
     if (!responses)
         return PAM_BUF_ERR;
+
     for (int i = 0; i < count; ++i) {
         const int kind = messages[i]->msg_style;
         if (!g_conversing) {
@@ -177,9 +193,11 @@ static int converse(int count, const pam_message** messages, pam_response** resu
                 freeResponses(responses, count);
                 return PAM_CONV_ERR;
             }
+
             fprintf(stderr, "PAM: %s\n", messages[i]->msg);
             continue;
         }
+
         QString style;
         switch (kind) {
         case PAM_PROMPT_ECHO_OFF: style = QStringLiteral("secret"); break;
@@ -190,14 +208,17 @@ static int converse(int count, const pam_message** messages, pam_response** resu
             freeResponses(responses, count);
             return PAM_CONV_ERR;
         }
+
         send({{QStringLiteral("type"), QStringLiteral("question")},
               {QStringLiteral("style"), style},
               {QStringLiteral("text"), QString::fromUtf8(messages[i]->msg)}});
+
         auto answer = receive();
         if (!answer || answer->value(QStringLiteral("type")).toString() != QLatin1String("answer")) {
             freeResponses(responses, count);
             return PAM_CONV_ERR;
         }
+
         if (kind == PAM_PROMPT_ECHO_OFF || kind == PAM_PROMPT_ECHO_ON) {
             QString text = answer->value(QStringLiteral("response")).toString();
             QByteArray bytes = text.toUtf8();
@@ -209,8 +230,10 @@ static int converse(int count, const pam_message** messages, pam_response** resu
                 return PAM_BUF_ERR;
             }
         }
+
         (*answer)[QStringLiteral("response")] = QJsonValue();
     }
+
     *result = responses;
     return PAM_SUCCESS;
 }
@@ -227,22 +250,24 @@ struct Account {
 
 } // namespace
 
-static std::optional<Account> account(pam_handle_t* pam)
+static std::optional<Account> account(pam_handle_t *pam)
 {
     // PAM_USER, since a module may have changed it.
-    const void* item = nullptr;
+    const void *item = nullptr;
     if (pam_get_item(pam, PAM_USER, &item) != PAM_SUCCESS || !item)
         return std::nullopt;
-    const passwd* entry = getpwnam(static_cast<const char*>(item));
+
+    const passwd *entry = getpwnam(static_cast<const char *>(item));
     if (!entry)
         return std::nullopt;
+
     return Account {entry->pw_name, entry->pw_dir, entry->pw_shell, entry->pw_uid, entry->pw_gid};
 }
 
-static std::vector<std::string> strings(const QJsonArray& array)
+static std::vector<std::string> strings(const QJsonArray &array)
 {
     std::vector<std::string> result;
-    for (const auto& value : array)
+    for (const auto &value : array)
         result.push_back(value.toString().toStdString());
     return result;
 }
@@ -253,12 +278,14 @@ int main()
     sigset_t none;
     sigemptyset(&none);
     sigprocmask(SIG_SETMASK, &none, nullptr);
+
     struct sigaction action = {};
     action.sa_handler = onTerminate;
     sigemptyset(&action.sa_mask);
     sigaction(SIGTERM, &action, nullptr);
     action.sa_handler = onStopDeadline;
     sigaction(SIGALRM, &action, nullptr);
+
     // The daemon's death ends the login like its SIGTERM; no password goes to a core file.
     prctl(PR_SET_PDEATHSIG, SIGTERM);
     prctl(PR_SET_DUMPABLE, 0);
@@ -269,6 +296,7 @@ int main()
         fail(false, QStringLiteral("Expected a login request"));
         return 1;
     }
+
     const std::string service = login->value(QStringLiteral("service")).toString().toStdString();
     const std::string user = login->value(QStringLiteral("user")).toString().toStdString();
     const bool authenticate = login->value(QStringLiteral("authenticate")).toBool();
@@ -277,16 +305,18 @@ int main()
         fail(false, QStringLiteral("Incomplete login request"));
         return 1;
     }
+
     // The login screen's own login has nobody to answer its PAM messages either.
     g_conversing = authenticate;
 
     const pam_conv conversation {converse, nullptr};
-    pam_handle_t* pam = nullptr;
+    pam_handle_t *pam = nullptr;
     int status = pam_start(service.c_str(), user.c_str(), &conversation, &pam);
     if (status != PAM_SUCCESS) {
         fail(false, QString::fromUtf8(pam_strerror(pam, status)));
         return 1;
     }
+
     g_pam = 1;
     const auto finish = [&](int result) {
         g_pam = 0;
@@ -301,6 +331,7 @@ int main()
             return finish(status);
         }
     }
+
     status = pam_acct_mgmt(pam, 0);
     if (status == PAM_NEW_AUTHTOK_REQD)
         status = pam_chauthtok(pam, PAM_CHANGE_EXPIRED_AUTHTOK);
@@ -308,11 +339,13 @@ int main()
         fail(true, QString::fromUtf8(pam_strerror(pam, status)));
         return finish(status);
     }
+
     status = pam_setcred(pam, PAM_ESTABLISH_CRED);
     if (status != PAM_SUCCESS) {
         fail(false, QString::fromUtf8(pam_strerror(pam, status)));
         return finish(status);
     }
+
     g_conversing = false;
     send({{QStringLiteral("type"), QStringLiteral("authenticated")}});
 
@@ -323,6 +356,7 @@ int main()
         pam_end(pam, PAM_SUCCESS);
         return 0;
     }
+
     const std::vector<std::string> command = strings(request->value(QStringLiteral("cmd")).toArray());
     const auto owner = account(pam);
     if (command.empty() || !owner) {
@@ -334,8 +368,9 @@ int main()
     // pam_systemd takes the seat, VT, type and class from here.
     const std::string tty = "tty" + std::to_string(vt);
     pam_set_item(pam, PAM_TTY, tty.c_str());
-    for (const std::string& variable : strings(request->value(QStringLiteral("env")).toArray()))
+    for (const std::string &variable : strings(request->value(QStringLiteral("env")).toArray()))
         pam_putenv(pam, variable.c_str());
+
     const std::string home = "HOME=" + owner->home;
     const std::string name = "USER=" + owner->name;
     const std::string logname = "LOGNAME=" + owner->name;
@@ -355,12 +390,13 @@ int main()
         pam_setcred(pam, PAM_DELETE_CRED);
         return finish(status);
     }
-    const char* sessionId = pam_getenv(pam, "XDG_SESSION_ID");
-    char** environment = pam_getenvlist(pam);
 
-    std::vector<char*> arguments;
-    for (const std::string& argument : command)
-        arguments.push_back(const_cast<char*>(argument.c_str()));
+    const char *sessionId = pam_getenv(pam, "XDG_SESSION_ID");
+    char **environment = pam_getenvlist(pam);
+
+    std::vector<char *> arguments;
+    for (const std::string &argument : command)
+        arguments.push_back(const_cast<char *>(argument.c_str()));
     arguments.push_back(nullptr);
 
     // The session runs in a child; this process stays to close the PAM session.
@@ -371,12 +407,14 @@ int main()
         if (null >= 0)
             dup2(null, STDIN_FILENO);
         dup2(STDERR_FILENO, STDOUT_FILENO);
+
         // Not the session's: fds PAM modules left open, the ignored SIGPIPE, the
         // stop handlers.
         close_range(3, ~0U, 0);
         signal(SIGPIPE, SIG_DFL);
         signal(SIGTERM, SIG_DFL);
         signal(SIGALRM, SIG_DFL);
+
         if (initgroups(owner->name.c_str(), owner->gid) != 0 || setgid(owner->gid) != 0
             || setuid(owner->uid) != 0)
             _exit(127);
@@ -384,25 +422,30 @@ int main()
         prctl(PR_SET_PDEATHSIG, SIGTERM);
         if (chdir(owner->home.c_str()) != 0 && chdir("/") != 0)
             _exit(127);
+
         execve(arguments.front(), arguments.data(), environment);
         _exit(127);
     }
+
     // The child took its copy across execve; this side is done with it.
-    for (char** variable = environment; variable && *variable; ++variable)
+    for (char **variable = environment; variable && *variable; ++variable)
         free(*variable);
     free(environment);
+
     if (child < 0) {
         fail(false, QString::fromUtf8(strerror(errno)));
         pam_close_session(pam, 0);
         pam_setcred(pam, PAM_DELETE_CRED);
         return finish(PAM_SESSION_ERR);
     }
+
     g_session = child;
     g_opening = 0;
     if (g_stopRequested) {
         g_stopRequested = 0;
         raise(SIGTERM);
     }
+
     send({{QStringLiteral("type"), QStringLiteral("started")},
           {QStringLiteral("pid"), qint64(child)},
           {QStringLiteral("session"), QString::fromUtf8(sessionId ? sessionId : "")}});
@@ -411,22 +454,27 @@ int main()
     siginfo_t exited = {};
     while (waitid(P_PID, id_t(child), &exited, WEXITED | WNOWAIT) < 0 && errno == EINTR) {
     }
+
     // The session is over; closing it is not to be cut short.
     signal(SIGTERM, SIG_IGN);
     alarm(0);
+
     // The killed leader can exit before the rest of its group, whose compositor
     // still holds the Wayland socket's lock the next login needs.
     for (int waited = 0; g_killed && waited < 5000 && groupHasOthers(child); waited += 20)
         usleep(20 * 1000);
+
     g_session = 0;
     int wait = 0;
     while (waitpid(child, &wait, 0) < 0 && errno == EINTR) {
     }
+
     // Closing the PAM session needs root.
     pam_close_session(pam, 0);
     pam_setcred(pam, PAM_DELETE_CRED);
     g_pam = 0;
     pam_end(pam, PAM_SUCCESS);
+
     send({{QStringLiteral("type"), QStringLiteral("finished")},
           {QStringLiteral("status"),
            WIFEXITED(wait) ? WEXITSTATUS(wait) : 128 + (WIFSIGNALED(wait) ? WTERMSIG(wait) : 0)}});
