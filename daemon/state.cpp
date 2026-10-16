@@ -1,27 +1,20 @@
 #include "state.h"
 
-#include <QDir>
-#include <QFileInfo>
-#include <QSettings>
+#include "base/settings.h"
 
 namespace dm {
 
-State::State(QString path)
+State::State(std::string path)
     : m_path(std::move(path))
 {
 }
 
-void State::remember(const QString &user, const QString &session)
+void State::remember(const std::string &user, const std::string &session)
 {
-    QDir().mkpath(QFileInfo(m_path).absolutePath());
-
-    QSettings settings(m_path, QSettings::IniFormat);
-    settings.setValue(QStringLiteral("Last/User"), user);
-
-    settings.beginGroup(QStringLiteral("Sessions"));
-    settings.setValue(user, session);
-    settings.endGroup();
-
+    // Writing creates the directory as well.
+    cutefish::base::Settings settings(m_path);
+    settings.setValue("Last/User", user);
+    settings.setValue("Sessions/" + user, session);
     settings.sync();
 }
 

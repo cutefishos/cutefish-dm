@@ -6,15 +6,14 @@ project(cutefish-dm
     LANGUAGES CXX
 )
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_AUTOMOC ON)
 
 include(GNUInstallDirs)
 option(BUILD_TESTING "Build the test suite" OFF)
 include(CTest)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core DBus Network)
+find_package(CutefishToolkit REQUIRED)
 find_library(PAM_LIBRARY pam)
 if(NOT PAM_LIBRARY)
     message(FATAL_ERROR "cutefish-dm needs libpam")
@@ -24,7 +23,7 @@ set(DM_HELPER_PATH ${CMAKE_INSTALL_FULL_LIBEXECDIR}/cutefish-dm-helper)
 set(DM_SESSION_WRAPPER ${CMAKE_INSTALL_FULL_LIBEXECDIR}/cutefish-dm-session)
 
 add_library(cutefish-dm-common STATIC common/wire.cpp)
-target_link_libraries(cutefish-dm-common PUBLIC Qt6::Core)
+target_link_libraries(cutefish-dm-common PUBLIC Cutefish::ToolkitBase)
 
 add_executable(cutefish-dm
     daemon/config.cpp
@@ -40,9 +39,9 @@ target_compile_definitions(cutefish-dm PRIVATE
     DM_HELPER_PATH="${DM_HELPER_PATH}"
     DM_SESSION_WRAPPER="${DM_SESSION_WRAPPER}"
 )
-target_link_libraries(cutefish-dm PRIVATE cutefish-dm-common Qt6::Core Qt6::DBus Qt6::Network)
+target_link_libraries(cutefish-dm PRIVATE cutefish-dm-common)
 
-# No Qt event loop and no threads: PAM modules and the session's fork run here.
+# No event loop and no threads: PAM modules and the session's fork run here.
 add_executable(cutefish-dm-helper helper/main.cpp)
 target_link_libraries(cutefish-dm-helper PRIVATE cutefish-dm-common ${PAM_LIBRARY})
 

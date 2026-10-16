@@ -1,75 +1,71 @@
 #include "wire.h"
 
-#include <QJsonDocument>
+#include "base/strings.h"
+
 #include <cstring>
 
 namespace dm {
 
-QByteArray encodeFrame(const QJsonObject &message)
+std::string encodeFrame(const Json &message)
 {
-    const QByteArray payload = QJsonDocument(message).toJson(QJsonDocument::Compact);
-    const quint32 length = quint32(payload.size());
+    std::string payload = message.serialize();
+    const uint32_t length = uint32_t(payload.size());
 
-    QByteArray frame(reinterpret_cast<const char *>(&length), sizeof(length));
+    std::string frame(reinterpret_cast<const char *>(&length), sizeof(length));
     frame.append(payload);
+    wipe(payload);
     return frame;
 }
 
-std::optional<QJsonObject> FrameReader::next()
+std::optional<Json> FrameReader::next()
 {
-    if (m_failed || m_buffer.size() < qsizetype(sizeof(quint32)))
+    if (m_failed || m_buffer.size() < sizeof(uint32_t))
         return std::nullopt;
 
-    quint32 length = 0;
-    std::memcpy(&length, m_buffer.constData(), sizeof(length));
+    uint32_t length = 0;
+    std::memcpy(&length, m_buffer.data(), sizeof(length));
     if (length > kMaxFrameSize) {
         m_failed = true;
         return std::nullopt;
     }
 
-    if (m_buffer.size() < qsizetype(sizeof(quint32) + length))
+    if (m_buffer.size() < sizeof(uint32_t) + length)
         return std::nullopt;
 
-    QByteArray payload = m_buffer.mid(sizeof(quint32), length);
+    std::string payload = m_buffer.substr(sizeof(uint32_t), length);
     // Only the frame taken out: the bytes after it are the next one.
-    explicit_bzero(m_buffer.data(), sizeof(quint32) + length);
-    m_buffer.remove(0, sizeof(quint32) + length);
+    explicit_bzero(m_buffer.data(), sizeof(uint32_t) + length);
+    m_buffer.erase(0, sizeof(uint32_t) + length);
 
-    const auto document = QJsonDocument::fromJson(payload);
+    auto document = Json::parse(payload);
     wipe(payload);
-    if (!document.isObject()) {
+    if (!document || !document->isObject()) {
         m_failed = true;
         return std::nullopt;
     }
 
-    return document.object();
+    return document;
 }
 
-QByteArray encodeLine(const QJsonObject &message)
+std::string encodeLine(const Json &message)
 {
-    return QJsonDocument(message).toJson(QJsonDocument::Compact) + '\n';
+    return message.serialize() + '\n';
 }
 
-std::optional<QJsonObject> decodeLine(const QByteArray &line)
+std::optional<Json> decodeLine(std::string_view line)
 {
-    const auto document = QJsonDocument::fromJson(line.trimmed());
-    if (!document.isObject())
+    auto document = Json::parse(cutefish::base::strings::trimmed(line));
+    if (!document || !document->isObject())
         return std::nullopt;
 
-    return document.object();
+    return document;
 }
 
-void wipe(QByteArray &bytes)
+void wipe(std::string &bytes)
 {
-    if (!bytes.isEmpty())
-        explicit_bzero(bytes.data(), size_t(bytes.size()));
-}
-
-void wipe(QString &text)
-{
-    if (!text.isEmpty())
-        explicit_bzero(text.data(), size_t(text.size()) * sizeof(QChar));
-    text.clear();
+    if (!bytes.empty())
+        explicit_bzero(bytes.data(), bytes.size());
+    bytes.clear();
 }
 
 } // namespace dm

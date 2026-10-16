@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QString>
+#include <string>
 
 namespace dm {
 
@@ -9,12 +9,12 @@ namespace dm {
 class State
 {
 public:
-    explicit State(QString path);
+    explicit State(std::string path);
 
-    void remember(const QString &user, const QString &session);
+    void remember(const std::string &user, const std::string &session);
 
 private:
-    QString m_path;
+    std::string m_path;
 };
 
 } // namespace dm

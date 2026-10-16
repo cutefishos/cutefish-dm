@@ -1,9 +1,9 @@
 #include "terminal.h"
 
-#include <QDBusConnection>
-#include <QDBusInterface>
-#include <QDBusReply>
-#include <QFile>
+#include "base/dbus.h"
+#include "base/file.h"
+#include "base/logging.h"
+#include "base/strings.h"
 
 #include <fcntl.h>
 #include <linux/kd.h>
@@ -11,12 +11,13 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+using namespace cutefish;
+
 namespace dm {
 
 static int openVt(int vt)
 {
-    return ::open(QStringLiteral("/dev/tty%1").arg(vt).toLocal8Bit().constData(),
-                  O_RDWR | O_NOCTTY | O_CLOEXEC);
+    return ::open(("/dev/tty" + std::to_string(vt)).c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC);
 }
 
 bool setGraphicsMode(int vt)
@@ -59,24 +60,24 @@ bool isControlled(int vt)
 
 int activeVt()
 {
-    QFile file(QStringLiteral("/sys/class/tty/tty0/active"));
-    if (!file.open(QIODevice::ReadOnly))
+    const std::optional<std::string> active = base::file::read("/sys/class/tty/tty0/active");
+    if (!active)
         return 0;
 
-    return QString::fromLatin1(file.readAll()).trimmed().mid(3).toInt();
+    const std::string_view name = base::strings::trimmed(*active);
+    return name.size() > 3 ? base::strings::toNumber<int>(name.substr(3)).value_or(0) : 0;
 }
 
-bool activateSession(const QString &sessionId)
+bool activateSession(const std::string &sessionId)
 {
-    QDBusInterface manager(QStringLiteral("org.freedesktop.login1"),
-                           QStringLiteral("/org/freedesktop/login1"),
-                           QStringLiteral("org.freedesktop.login1.Manager"),
-                           QDBusConnection::systemBus());
-    const QDBusReply<void> reply = manager.call(QStringLiteral("ActivateSession"), sessionId);
-    if (!reply.isValid())
-        qWarning() << "Cannot activate session" << sessionId << reply.error().message();
+    const base::dbus::Proxy manager(base::dbus::Connection::system(), "org.freedesktop.login1",
+                                    "/org/freedesktop/login1", "org.freedesktop.login1.Manager");
+    const base::dbus::Reply reply = manager.call("ActivateSession", sessionId);
+    if (reply.isError())
+        CF_WARNING(base::LogCategory::defaultCategory())
+                << "Cannot activate session" << sessionId << reply.error().message;
 
-    return reply.isValid();
+    return !reply.isError();
 }
 
 } // namespace dm

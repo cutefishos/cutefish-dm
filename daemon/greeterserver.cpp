@@ -1,82 +1,70 @@
 #include "greeterserver.h"
 
-#include <QFile>
-#include <QJsonArray>
-#include <QLocalSocket>
+#include "base/event_loop.h"
 
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+using namespace cutefish;
+
 namespace dm {
 
-GreeterServer::GreeterServer(QObject *parent)
-    : QObject(parent)
+GreeterServer::GreeterServer()
 {
-    connect(&m_server, &QLocalServer::newConnection, this, &GreeterServer::accept);
+    m_server.onNewConnection = [this](int fd) { accept(fd); };
 }
 
 GreeterServer::~GreeterServer()
 {
-    // m_server owns the socket; deleted with it, it would signal a dead object.
-    if (m_client) {
-        m_client->disconnect(this);
-        delete m_client;
-    }
-
+    if (m_client)
+        m_client->abort();
     m_server.close();
 }
 
-bool GreeterServer::listen(const QString &path, uid_t owner)
+bool GreeterServer::listen(const std::string &path, uid_t owner)
 {
     m_owner = owner;
     m_path = path;
 
-    QLocalServer::removeServer(path);
-    m_server.setSocketOptions(QLocalServer::UserAccessOption);
     if (!m_server.listen(path))
         return false;
 
-    const QByteArray native = QFile::encodeName(path);
-    return ::chown(native.constData(), owner, gid_t(-1)) == 0 && ::chmod(native.constData(), 0600) == 0;
+    return ::chown(path.c_str(), owner, gid_t(-1)) == 0 && ::chmod(path.c_str(), 0600) == 0;
 }
 
-void GreeterServer::accept()
+void GreeterServer::accept(int fd)
 {
-    while (QLocalSocket *socket = m_server.nextPendingConnection()) {
-        ucred peer {};
-        socklen_t length = sizeof(peer);
-        const bool trusted =
-                getsockopt(int(socket->socketDescriptor()), SOL_SOCKET, SO_PEERCRED, &peer, &length) == 0
-                && (peer.uid == m_owner || peer.uid == 0);
-        if (!trusted) {
-            socket->abort();
-            socket->deleteLater();
-            continue;
-        }
-
-        // A new login screen replaces whatever was connected before.
-        if (m_client) {
-            m_client->disconnect(this);
-            m_client->abort();
-            m_client->deleteLater();
-        }
-
-        m_client = socket;
-        m_reader = FrameReader();
-        m_queued.clear();
-        m_waiting = false;
-
-        connect(socket, &QLocalSocket::readyRead, this, &GreeterServer::readRequests);
-        connect(socket, &QLocalSocket::disconnected, this, [this, socket] {
-            if (socket != m_client)
-                return;
-
-            m_client = nullptr;
-            socket->deleteLater();
-            emit disconnected();
-        });
+    ucred peer {};
+    socklen_t length = sizeof(peer);
+    const bool trusted = getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &length) == 0
+            && (peer.uid == m_owner || peer.uid == 0);
+    if (!trusted) {
+        ::close(fd);
+        return;
     }
+
+    // A new login screen replaces whatever was connected before.
+    if (m_client)
+        m_client->abort();
+
+    m_client = std::make_unique<base::LocalSocket>();
+    m_client->adopt(fd);
+    m_reader = FrameReader();
+    m_queued.clear();
+    m_waiting = false;
+
+    m_client->onReadyRead = [this] { readRequests(); };
+    m_client->onDisconnected = [this] { dropClient(); };
+    m_client->onError = [this] { dropClient(); };
+}
+
+void GreeterServer::dropClient()
+{
+    // From inside the socket's own callback: it goes on the next loop turn.
+    base::EventLoop::current()->post([client = std::shared_ptr<base::LocalSocket>(std::move(m_client))] {});
+    if (auto callback = onDisconnected)
+        callback();
 }
 
 void GreeterServer::readRequests()
@@ -84,45 +72,58 @@ void GreeterServer::readRequests()
     if (!m_client)
         return;
 
-    QByteArray bytes = m_client->readAll();
+    std::string bytes = m_client->readAll();
     m_reader.append(bytes);
     wipe(bytes);
 
     while (auto request = m_reader.next())
-        m_queued.append(*request);
+        m_queued.push_back(std::move(*request));
     if (m_reader.failed()) {
         m_client->abort();
+        dropClient();
         return;
     }
 
-    if (!m_waiting && !m_queued.isEmpty())
-        dispatch(m_queued.takeFirst());
-}
-
-void GreeterServer::dispatch(const QJsonObject &request)
-{
-    m_waiting = true;
-
-    const QString type = request.value(QStringLiteral("type")).toString();
-    if (type == QLatin1String("create_session")) {
-        emit createSession(request.value(QStringLiteral("username")).toString());
-    } else if (type == QLatin1String("post_auth_message_response")) {
-        emit postAuthMessageResponse(request.value(QStringLiteral("response")));
-    } else if (type == QLatin1String("start_session")) {
-        QStringList command, environment;
-        for (const auto &value : request.value(QStringLiteral("cmd")).toArray())
-            command.append(value.toString());
-        for (const auto &value : request.value(QStringLiteral("env")).toArray())
-            environment.append(value.toString());
-        emit startSession(command, environment, request.value(QStringLiteral("session")).toString());
-    } else if (type == QLatin1String("cancel_session")) {
-        emit cancelSession();
-    } else {
-        respond(error(false, QStringLiteral("Unknown request")));
+    if (!m_waiting && !m_queued.empty()) {
+        Json request = std::move(m_queued.front());
+        m_queued.pop_front();
+        dispatch(request);
     }
 }
 
-void GreeterServer::respond(const QJsonObject &response)
+void GreeterServer::dispatch(const Json &request)
+{
+    m_waiting = true;
+
+    const std::string type = request["type"].toString();
+    if (type == "create_session") {
+        if (auto callback = onCreateSession)
+            callback(request["username"].toString());
+    } else if (type == "post_auth_message_response") {
+        if (auto callback = onPostAuthMessageResponse)
+            callback(request["response"]);
+    } else if (type == "start_session") {
+        std::vector<std::string> command;
+        std::vector<std::string> environment;
+        if (request["cmd"].isArray()) {
+            for (const Json &value : request["cmd"].toArray())
+                command.push_back(value.toString());
+        }
+        if (request["env"].isArray()) {
+            for (const Json &value : request["env"].toArray())
+                environment.push_back(value.toString());
+        }
+        if (auto callback = onStartSession)
+            callback(command, environment, request["session"].toString());
+    } else if (type == "cancel_session") {
+        if (auto callback = onCancelSession)
+            callback();
+    } else {
+        respond(error(false, "Unknown request"));
+    }
+}
+
+void GreeterServer::respond(const Json &response)
 {
     if (!m_waiting)
         return;
@@ -131,28 +132,28 @@ void GreeterServer::respond(const QJsonObject &response)
     if (m_client)
         m_client->write(encodeFrame(response));
 
-    if (!m_queued.isEmpty())
-        dispatch(m_queued.takeFirst());
+    if (!m_queued.empty()) {
+        Json request = std::move(m_queued.front());
+        m_queued.pop_front();
+        dispatch(request);
+    }
 }
 
-QJsonObject GreeterServer::success()
+Json GreeterServer::success()
 {
-    return {{QStringLiteral("type"), QStringLiteral("success")}};
+    return Json::object({{"type", "success"}});
 }
 
-QJsonObject GreeterServer::error(bool authentication, const QString &description)
+Json GreeterServer::error(bool authentication, const std::string &description)
 {
-    return {{QStringLiteral("type"), QStringLiteral("error")},
-            {QStringLiteral("error_type"),
-             authentication ? QStringLiteral("auth_error") : QStringLiteral("error")},
-            {QStringLiteral("description"), description}};
+    return Json::object({{"type", "error"},
+                         {"error_type", authentication ? "auth_error" : "error"},
+                         {"description", description}});
 }
 
-QJsonObject GreeterServer::authMessage(const QString &style, const QString &text)
+Json GreeterServer::authMessage(const std::string &style, const std::string &text)
 {
-    return {{QStringLiteral("type"), QStringLiteral("auth_message")},
-            {QStringLiteral("auth_message_type"), style},
-            {QStringLiteral("auth_message"), text}};
+    return Json::object({{"type", "auth_message"}, {"auth_message_type", style}, {"auth_message", text}});
 }
 
 } // namespace dm

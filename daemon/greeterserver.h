@@ -1,55 +1,59 @@
 #pragma once
 
-#include <QJsonObject>
-#include <QList>
-#include <QLocalServer>
-#include <QPointer>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <string>
 #include <sys/types.h>
+#include <vector>
+
+#include "base/local_socket.h"
 
 #include "../common/wire.h"
-
-class QLocalSocket;
 
 namespace dm {
 
 // GREETD_SOCK with greetd's protocol; one request is answered at a time.
-class GreeterServer : public QObject
+class GreeterServer
 {
-    Q_OBJECT
 public:
-    explicit GreeterServer(QObject *parent = nullptr);
-    ~GreeterServer() override;
+    GreeterServer();
+    ~GreeterServer();
+
+    GreeterServer(const GreeterServer &) = delete;
+    GreeterServer &operator=(const GreeterServer &) = delete;
 
     // Only `owner` may connect; the socket is chowned to it with mode 0600.
-    bool listen(const QString &path, uid_t owner);
-    QString path() const { return m_path; }
+    bool listen(const std::string &path, uid_t owner);
+    std::string path() const { return m_path; }
 
     // Answers the request in flight.
-    void respond(const QJsonObject &response);
-    static QJsonObject success();
-    static QJsonObject error(bool authentication, const QString &description);
-    static QJsonObject authMessage(const QString &style, const QString &text);
+    void respond(const Json &response);
+    static Json success();
+    static Json error(bool authentication, const std::string &description);
+    static Json authMessage(const std::string &style, const std::string &text);
 
-signals:
-    void createSession(const QString &username);
-    void postAuthMessageResponse(const QJsonValue &response);
+    std::function<void(const std::string &username)> onCreateSession;
+    std::function<void(const Json &response)> onPostAuthMessageResponse;
     // `session`, a wayland-sessions id, is our extension; greetd greeters send cmd.
-    void startSession(const QStringList &command, const QStringList &environment,
-                      const QString &session);
-    void cancelSession();
+    std::function<void(const std::vector<std::string> &command, const std::vector<std::string> &environment,
+                       const std::string &session)>
+            onStartSession;
+    std::function<void()> onCancelSession;
     // The client went away; a new greeter starts from scratch.
-    void disconnected();
+    std::function<void()> onDisconnected;
 
 private:
-    void accept();
+    void accept(int fd);
     void readRequests();
-    void dispatch(const QJsonObject &request);
+    void dropClient();
+    void dispatch(const Json &request);
 
-    QLocalServer m_server;
-    QPointer<QLocalSocket> m_client;
+    cutefish::base::LocalServer m_server;
+    std::unique_ptr<cutefish::base::LocalSocket> m_client;
     FrameReader m_reader;
-    QList<QJsonObject> m_queued;
-    QString m_path;
+    std::deque<Json> m_queued;
+    std::string m_path;
     uid_t m_owner = 0;
     bool m_waiting = false;
 };

@@ -1,45 +1,75 @@
 #include "config.h"
 
-#include <QFileInfo>
-#include <QProcess>
-#include <QSettings>
+#include "base/settings.h"
+#include "base/strings.h"
+
+#include <unistd.h>
+
+using namespace cutefish;
 
 namespace dm {
 
-Config Config::load(const QString &path)
+Config Config::load(const std::string &path)
 {
     Config config;
-    if (!QFileInfo::exists(path))
+    if (access(path.c_str(), F_OK) != 0)
         return config;
 
-    QSettings settings(path, QSettings::IniFormat);
+    const base::Settings settings(path);
 
-    settings.beginGroup(QStringLiteral("Greeter"));
-    config.greeterVt = settings.value(QStringLiteral("Vt"), config.greeterVt).toInt();
-    config.greeterUser = settings.value(QStringLiteral("User"), config.greeterUser).toString();
-    if (settings.contains(QStringLiteral("Command")))
-        config.greeterCommand =
-                QProcess::splitCommand(settings.value(QStringLiteral("Command")).toString());
-    config.greeterService = settings.value(QStringLiteral("Service"), config.greeterService).toString();
-    settings.endGroup();
+    config.greeterVt = int(settings.intValue("Greeter/Vt", config.greeterVt));
+    config.greeterUser = settings.stringValue("Greeter/User", config.greeterUser);
+    if (settings.contains("Greeter/Command"))
+        config.greeterCommand = splitCommand(settings.stringValue("Greeter/Command"));
+    config.greeterService = settings.stringValue("Greeter/Service", config.greeterService);
 
-    settings.beginGroup(QStringLiteral("Session"));
-    config.sessionVt = settings.value(QStringLiteral("Vt"), config.sessionVt).toInt();
-    config.sessionService = settings.value(QStringLiteral("Service"), config.sessionService).toString();
-    if (settings.contains(QStringLiteral("Directories")))
-        config.sessionDirectories =
-                settings.value(QStringLiteral("Directories")).toString().split(QLatin1Char(':'), Qt::SkipEmptyParts);
-    config.defaultSession =
-            settings.value(QStringLiteral("Default"), config.defaultSession).toString();
-    settings.endGroup();
+    config.sessionVt = int(settings.intValue("Session/Vt", config.sessionVt));
+    config.sessionService = settings.stringValue("Session/Service", config.sessionService);
+    if (settings.contains("Session/Directories"))
+        config.sessionDirectories = base::strings::split(settings.stringValue("Session/Directories"), ':',
+                                                         base::strings::SplitBehavior::SkipEmptyParts);
+    config.defaultSession = settings.stringValue("Session/Default", config.defaultSession);
 
-    settings.beginGroup(QStringLiteral("Daemon"));
-    config.runtimeDirectory =
-            settings.value(QStringLiteral("RuntimeDirectory"), config.runtimeDirectory).toString();
-    config.statePath = settings.value(QStringLiteral("StatePath"), config.statePath).toString();
-    settings.endGroup();
+    config.runtimeDirectory = settings.stringValue("Daemon/RuntimeDirectory", config.runtimeDirectory);
+    config.statePath = settings.stringValue("Daemon/StatePath", config.statePath);
 
     return config;
+}
+
+std::vector<std::string> splitCommand(const std::string &command)
+{
+    std::vector<std::string> arguments;
+    std::string argument;
+    int quotes = 0;
+    bool inQuote = false;
+
+    for (const char c : command) {
+        if (c == '"') {
+            // The third quote in a row is a literal one.
+            if (++quotes == 3) {
+                quotes = 0;
+                argument += c;
+            }
+            continue;
+        }
+        if (quotes) {
+            if (quotes == 1)
+                inQuote = !inQuote;
+            quotes = 0;
+        }
+        if (!inQuote && base::strings::isAsciiWhitespace(c)) {
+            if (!argument.empty()) {
+                arguments.push_back(argument);
+                argument.clear();
+            }
+        } else {
+            argument += c;
+        }
+    }
+    if (!argument.empty())
+        arguments.push_back(argument);
+
+    return arguments;
 }
 
 } // namespace dm

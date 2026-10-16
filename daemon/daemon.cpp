@@ -1,17 +1,18 @@
 #include "daemon.h"
 
-#include <QDBusConnection>
-#include <QDBusConnectionInterface>
-#include <QDBusReply>
-#include <QDir>
-#include <QPointer>
-#include <QProcess>
-#include <QStandardPaths>
-
+#include <algorithm>
+#include <filesystem>
 #include <pwd.h>
+
+#include "base/event_loop.h"
+#include "base/logging.h"
+#include "base/paths.h"
+#include "base/process.h"
 
 #include "sessions.h"
 #include "terminal.h"
+
+using namespace cutefish;
 
 namespace dm {
 
@@ -23,38 +24,54 @@ static constexpr int kControlPollMs = 20;
 // its cursor down with it, and the session's replaces it once its displays settle.
 static constexpr int kGreeterLingerMs = 3000;
 
-static std::optional<uid_t> uidOf(const QString &user)
+static std::optional<uid_t> uidOf(const std::string &user)
 {
-    const passwd *entry = getpwnam(user.toLocal8Bit().constData());
+    const passwd *entry = getpwnam(user.c_str());
     if (!entry)
         return std::nullopt;
 
     return entry->pw_uid;
 }
 
+// Runs a program to its end with this process's output; its exit code, or -2
+// when it cannot be started.
+static int execute(const std::string &program, const std::vector<std::string> &arguments)
+{
+    base::Process process;
+    process.setOutputForwarded(true);
+    int exitCode = -1;
+    process.onFinished = [&exitCode](int code, bool crashed) { exitCode = crashed ? -1 : code; };
+    if (!process.start(program, arguments))
+        return -2;
+    while (!process.waitForFinished(std::chrono::hours(1))) {
+    }
+    return exitCode;
+}
+
 // As GDM does: plymouth gives up the display with its splash left on screen.
 static bool bootSplashRunning()
 {
-    const QString plymouth = QStandardPaths::findExecutable(QStringLiteral("plymouth"));
-    return !plymouth.isEmpty() && QProcess::execute(plymouth, {QStringLiteral("--ping")}) == 0;
+    const std::string plymouth = base::paths::findExecutable("plymouth");
+    return !plymouth.empty() && execute(plymouth, {"--ping"}) == 0;
 }
 
-Daemon::Daemon(Config config, QObject *parent)
-    : QObject(parent)
-    , m_config(std::move(config))
+Daemon::Daemon(Config config)
+    : m_config(std::move(config))
     , m_state(m_config.statePath)
 {
     m_greeterRestart.setSingleShot(true);
-    connect(&m_greeterRestart, &QTimer::timeout, this, &Daemon::startGreeter);
+    m_greeterRestart.onTimeout = [this] { startGreeter(); };
 
-    connect(&m_server, &GreeterServer::createSession, this, &Daemon::createSession);
-    connect(&m_server, &GreeterServer::postAuthMessageResponse, this,
-            &Daemon::postAuthMessageResponse);
-    connect(&m_server, &GreeterServer::startSession, this, &Daemon::startSession);
-    connect(&m_server, &GreeterServer::cancelSession, this, &Daemon::cancelSession);
-    connect(&m_server, &GreeterServer::disconnected, this, [this] {
+    m_server.onCreateSession = [this](const std::string &username) { createSession(username); };
+    m_server.onPostAuthMessageResponse = [this](const Json &response) { postAuthMessageResponse(response); };
+    m_server.onStartSession = [this](const std::vector<std::string> &command,
+                                     const std::vector<std::string> &environment, const std::string &session) {
+        startSession(command, environment, session);
+    };
+    m_server.onCancelSession = [this] { cancelSession(); };
+    m_server.onDisconnected = [this] {
         release(m_login);
-    });
+    };
 }
 
 Daemon::~Daemon()
@@ -65,6 +82,7 @@ Daemon::~Daemon()
     m_login.reset();
     m_session.reset();
     m_greeter.reset();
+    m_released.clear();
 
     restoreTextMode(m_config.sessionVt);
     restoreTextMode(m_config.greeterVt);
@@ -74,26 +92,32 @@ bool Daemon::start()
 {
     const auto greeter = uidOf(m_config.greeterUser);
     if (!greeter) {
-        qCritical() << "No login screen user" << m_config.greeterUser;
+        CF_CRITICAL(base::LogCategory::defaultCategory()) << "No login screen user" << m_config.greeterUser;
         return false;
     }
 
-    QDir().mkpath(m_config.runtimeDirectory);
-    const QString socket = m_config.runtimeDirectory + QStringLiteral("/greeter.sock");
+    std::error_code error;
+    std::filesystem::create_directories(m_config.runtimeDirectory, error);
+    const std::string socket = m_config.runtimeDirectory + "/greeter.sock";
     if (!m_server.listen(socket, *greeter)) {
-        qCritical() << "Cannot listen on" << socket;
+        CF_CRITICAL(base::LogCategory::defaultCategory()) << "Cannot listen on" << socket;
         return false;
     }
 
-    auto bus = QDBusConnection::systemBus();
-    if (!bus.registerService(QStringLiteral("com.cutefish.DisplayManager"))
-        || !bus.registerObject(QStringLiteral("/com/cutefish/DisplayManager"), this,
-                               QDBusConnection::ExportScriptableSlots))
-        qWarning() << "Cannot register com.cutefish.DisplayManager; sessions will end on screen";
+    m_bus = base::dbus::Connection::system();
+    if (m_bus) {
+        m_object = std::make_unique<base::dbus::Object>(m_bus, "/com/cutefish/DisplayManager",
+                                                        "com.cutefish.DisplayManager");
+        m_object->addMethod("SwitchToGreeter", "", "",
+                            [this](base::dbus::MethodCall &call) { switchToGreeter(call); });
+    }
+    if (!m_bus || !m_object->publish() || !m_bus->requestName("com.cutefish.DisplayManager"))
+        CF_WARNING(base::LogCategory::defaultCategory())
+                << "Cannot register com.cutefish.DisplayManager; sessions will end on screen";
 
     if (bootSplashRunning()) {
         m_bootSplash = true;
-        QProcess::execute(QStringLiteral("plymouth"), {QStringLiteral("deactivate")});
+        execute("plymouth", {"deactivate"});
     }
 
     // A run that ended mid-login may have left it in KD_GRAPHICS with nobody on it.
@@ -113,21 +137,19 @@ void Daemon::startGreeter()
     m_greeterSpent = false;
 
     m_greeter = std::make_unique<HelperProcess>();
-    connect(m_greeter.get(), &HelperProcess::authenticated, this, [this] {
-        m_greeter->start(m_config.greeterCommand,
-                         greeterEnvironment(m_config.greeterVt, m_server.path()));
-    });
-    connect(m_greeter.get(), &HelperProcess::started, this, [this] {
+    m_greeter->onAuthenticated = [this] {
+        m_greeter->start(m_config.greeterCommand, greeterEnvironment(m_config.greeterVt, m_server.path()));
+    };
+    m_greeter->onStarted = [this](const std::string &) {
         if (std::exchange(m_bootSplash, false))
-            QProcess::startDetached(QStringLiteral("plymouth"),
-                                    {QStringLiteral("quit"), QStringLiteral("--retain-splash")});
+            base::Process::startDetached("plymouth", {"quit", "--retain-splash"});
 
         showGreeter();
-    });
-    connect(m_greeter.get(), &HelperProcess::failed, this, [](bool, const QString &message) {
-        qWarning() << "Login screen:" << message;
-    });
-    connect(m_greeter.get(), &HelperProcess::finished, this, &Daemon::onGreeterFinished);
+    };
+    m_greeter->onFailed = [](bool, const std::string &message) {
+        CF_WARNING(base::LogCategory::defaultCategory()) << "Login screen:" << message;
+    };
+    m_greeter->onFinished = [this] { onGreeterFinished(); };
 
     m_greeter->login(m_config.greeterService, m_config.greeterUser, false, m_config.greeterVt);
 }
@@ -154,7 +176,8 @@ void Daemon::showGreeter()
         }
 
         // Never switch to a VT nobody took; restart the login screen instead.
-        qWarning() << "Cannot switch to the login screen on VT" << m_config.greeterVt;
+        CF_WARNING(base::LogCategory::defaultCategory())
+                << "Cannot switch to the login screen on VT" << m_config.greeterVt;
         greeter->terminate();
     });
 }
@@ -202,76 +225,73 @@ void Daemon::onGreeterFinished()
         return;
 
     ++m_greeterFailures;
-    m_greeterRestart.start(qMin(m_greeterFailures, 5) * 1000);
+    m_greeterRestart.start(std::chrono::milliseconds(std::min(m_greeterFailures, 5) * 1000));
 }
 
 void Daemon::replySwitchRequests(bool switched)
 {
-    auto bus = QDBusConnection::systemBus();
-    for (const QDBusMessage &request : std::exchange(m_switchRequests, {})) {
-        bus.send(switched ? request.createReply()
-                          : request.createErrorReply(QDBusError::Failed,
-                                                     QStringLiteral("The login screen is not up")));
+    for (base::dbus::MethodCall &request : std::exchange(m_switchRequests, {})) {
+        if (switched)
+            request.reply();
+        else
+            request.replyError("org.freedesktop.DBus.Error.Failed", "The login screen is not up");
     }
 }
 
-void Daemon::SwitchToGreeter(const QDBusMessage &message)
+void Daemon::switchToGreeter(base::dbus::MethodCall &call)
 {
-    auto bus = QDBusConnection::systemBus();
-
     // A caller that is gone before it is looked up is refused, not taken for root.
-    const QDBusReply<uint> caller = bus.interface()->serviceUid(message.service());
+    const base::dbus::Proxy driver(m_bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus");
+    const std::optional<uint32_t> caller =
+            driver.call("GetConnectionUnixUser", call.message().sender()).value<uint32_t>();
     const auto owner = m_session ? uidOf(m_session->user()) : std::nullopt;
-    if (!caller.isValid() || (caller.value() != 0 && (!owner || caller.value() != *owner))) {
-        bus.send(message.createErrorReply(QDBusError::AccessDenied,
-                                          QStringLiteral("Only the session's own user can end it")));
+    if (!caller || (*caller != 0 && (!owner || *caller != *owner))) {
+        call.replyError("org.freedesktop.DBus.Error.AccessDenied", "Only the session's own user can end it");
         return;
     }
 
-    message.setDelayedReply(true);
-    m_switchRequests.append(message);
+    m_switchRequests.push_back(call);
     returnToGreeter();
 }
 
-void Daemon::createSession(const QString &username)
+void Daemon::createSession(const std::string &username)
 {
     release(m_login);
 
     m_login = std::make_unique<HelperProcess>();
     auto *login = m_login.get();
-    connect(login, &HelperProcess::question, this, [this](const QString &style, const QString &text) {
+    login->onQuestion = [this](const std::string &style, const std::string &text) {
         m_server.respond(GreeterServer::authMessage(style, text));
-    });
-    connect(login, &HelperProcess::authenticated, this, [this] {
+    };
+    login->onAuthenticated = [this] {
         m_server.respond(GreeterServer::success());
-    });
-    connect(login, &HelperProcess::failed, this, [this, login](bool authentication,
-                                                             const QString &message) {
+    };
+    login->onFailed = [this, login](bool authentication, const std::string &message) {
         m_server.respond(GreeterServer::error(authentication, message));
         if (m_login.get() == login)
             release(m_login);
-    });
-    connect(login, &HelperProcess::finished, this, [this, login] {
+    };
+    login->onFinished = [this, login] {
         if (m_login.get() == login)
             release(m_login);
-    });
+    };
 
     login->login(m_config.sessionService, username, true, m_config.sessionVt);
 }
 
-void Daemon::postAuthMessageResponse(const QJsonValue &response)
+void Daemon::postAuthMessageResponse(const Json &response)
 {
     if (!m_login)
-        m_server.respond(GreeterServer::error(false, QStringLiteral("No session is being created")));
+        m_server.respond(GreeterServer::error(false, "No session is being created"));
     else
         m_login->answer(response);
 }
 
-void Daemon::startSession(const QStringList &command, const QStringList &environment,
-                          const QString &session)
+void Daemon::startSession(const std::vector<std::string> &command, const std::vector<std::string> &environment,
+                          const std::string &session)
 {
     if (!m_login || !m_login->isAuthenticated()) {
-        m_server.respond(GreeterServer::error(false, QStringLiteral("Not authenticated")));
+        m_server.respond(GreeterServer::error(false, "Not authenticated"));
         return;
     }
 
@@ -279,21 +299,25 @@ void Daemon::startSession(const QStringList &command, const QStringList &environ
     // The client's variables first: the session's own, set after, win.
     start.environment = environment;
 
-    if (!session.isEmpty()) {
+    if (!session.empty()) {
         const auto entry = findSession(m_config.sessionDirectories, session);
         if (!entry) {
-            m_server.respond(GreeterServer::error(false, QStringLiteral("No such session")));
+            m_server.respond(GreeterServer::error(false, "No such session"));
             return;
         }
 
-        start.command = QStringList {QStringLiteral(DM_SESSION_WRAPPER)} + entry->exec;
-        start.environment += sessionEnvironment(*entry, m_config.sessionVt);
+        start.command = {DM_SESSION_WRAPPER};
+        start.command.insert(start.command.end(), entry->exec.begin(), entry->exec.end());
+        const auto variables = sessionEnvironment(*entry, m_config.sessionVt);
+        start.environment.insert(start.environment.end(), variables.begin(), variables.end());
         m_state.remember(m_login->user(), session);
-    } else if (!command.isEmpty()) {
-        start.command = QStringList {QStringLiteral(DM_SESSION_WRAPPER)} + command;
-        start.environment += sessionEnvironment(SessionEntry {}, m_config.sessionVt);
+    } else if (!command.empty()) {
+        start.command = {DM_SESSION_WRAPPER};
+        start.command.insert(start.command.end(), command.begin(), command.end());
+        const auto variables = sessionEnvironment(SessionEntry {}, m_config.sessionVt);
+        start.environment.insert(start.environment.end(), variables.begin(), variables.end());
     } else {
-        m_server.respond(GreeterServer::error(false, QStringLiteral("Nothing to start")));
+        m_server.respond(GreeterServer::error(false, "Nothing to start"));
         return;
     }
 
@@ -325,27 +349,32 @@ void Daemon::launchSession(PendingStart start)
 
     m_session = std::move(m_login);
     HelperProcess *session = m_session.get();
-    connect(session, &HelperProcess::started, this, [this, session](const QString &id) {
+    session->onStarted = [this, session](const std::string &id) {
         whenControlled(session, m_config.sessionVt, [this, session, id](bool controlled) {
             if (m_session.get() != session)
                 return;
 
             // Never switch to a VT nobody took; end the session instead.
             if (!controlled || !activateSession(id)) {
-                qWarning() << "Cannot switch to the session on VT" << m_config.sessionVt
-                           << "- ending it";
+                CF_WARNING(base::LogCategory::defaultCategory())
+                        << "Cannot switch to the session on VT" << m_config.sessionVt << "- ending it";
                 session->terminate();
                 return;
             }
 
-            QTimer::singleShot(kGreeterLingerMs, this,
-                               [this, greeter = QPointer<HelperProcess>(m_greeter.get())] {
-                                   if (greeter && greeter == m_greeter.get())
-                                       stopGreeter();
-                               });
+            // The timer goes with the login screen it is for.
+            if (HelperProcess *greeter = m_greeter.get()) {
+                base::Timer *linger = greeter->addTimer();
+                linger->setSingleShot(true);
+                linger->onTimeout = [this, greeter] {
+                    if (greeter == m_greeter.get())
+                        stopGreeter();
+                };
+                linger->start(std::chrono::milliseconds(kGreeterLingerMs));
+            }
         });
-    });
-    connect(m_session.get(), &HelperProcess::finished, this, &Daemon::onSessionFinished);
+    };
+    m_session->onFinished = [this] { onSessionFinished(); };
 
     m_session->start(start.command, start.environment);
 }
@@ -370,20 +399,19 @@ void Daemon::onSessionFinished()
 
 void Daemon::whenControlled(HelperProcess *helper, int vt, std::function<void(bool)> then)
 {
-    // The helper's child, so the wait ends with it.
-    auto *timer = new QTimer(helper);
+    // The helper's, so the wait ends with it.
+    base::Timer *timer = helper->addTimer();
     auto waited = std::make_shared<int>(0);
-    connect(timer, &QTimer::timeout, this, [timer, waited, vt, then = std::move(then)] {
+    timer->onTimeout = [timer, waited, vt, then = std::move(then)] {
         *waited += kControlPollMs;
         const bool controlled = isControlled(vt);
         if (!controlled && *waited < kControlTimeoutMs)
             return;
 
         timer->stop();
-        timer->deleteLater();
         then(controlled);
-    });
-    timer->start(kControlPollMs);
+    };
+    timer->start(std::chrono::milliseconds(kControlPollMs));
 }
 
 void Daemon::release(std::unique_ptr<HelperProcess> &helper)
@@ -392,7 +420,13 @@ void Daemon::release(std::unique_ptr<HelperProcess> &helper)
         return;
 
     helper->disconnect();
-    helper.release()->deleteLater();
+    HelperProcess *released = helper.get();
+    m_released.push_back(std::move(helper));
+    base::EventLoop::current()->post([alive = std::weak_ptr<bool>(m_alive), this, released] {
+        if (alive.expired())
+            return;
+        std::erase_if(m_released, [released](const auto &entry) { return entry.get() == released; });
+    });
 }
 
 } // namespace dm

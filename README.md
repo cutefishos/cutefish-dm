@@ -5,7 +5,8 @@ session the user picks.
 
 ## Dependencies
 
-Qt 6.8 (Core, DBus, Network) and PAM; `cutefish-compositor` at runtime.
+The base library of [cutefish-toolkit](https://github.com/cutefishos/cutefish-toolkit)
+and PAM; `cutefish-compositor` at runtime. GoogleTest for the tests.
 
 ## Build
 

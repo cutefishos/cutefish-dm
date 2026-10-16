@@ -1,13 +1,16 @@
-#include <QCommandLineParser>
-#include <QCoreApplication>
-#include <QSocketNotifier>
-
 #include <csignal>
+#include <sys/epoll.h>
 #include <sys/signalfd.h>
 #include <unistd.h>
 
+#include "base/command_line.h"
+#include "base/event_loop.h"
+#include "base/logging.h"
+
 #include "config.h"
 #include "daemon.h"
+
+using namespace cutefish;
 
 int main(int argc, char *argv[])
 {
@@ -19,37 +22,33 @@ int main(int argc, char *argv[])
     sigprocmask(SIG_BLOCK, &mask, nullptr);
     const int signalFd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
 
-    QCoreApplication app(argc, argv);
-    QCoreApplication::setApplicationName(QStringLiteral("cutefish-dm"));
+    base::EventLoop loop;
 
-    QCommandLineParser parser;
+    base::CommandLineParser parser;
     parser.addHelpOption();
-    const QCommandLineOption configOption(QStringLiteral("config"),
-                                          QStringLiteral("Configuration file to read."),
-                                          QStringLiteral("path"),
-                                          QStringLiteral("/etc/cutefish-dm.conf"));
+    const base::CommandLineOption configOption("config", "Configuration file to read.", "path",
+                                               "/etc/cutefish-dm.conf");
     parser.addOption(configOption);
-    parser.process(app);
+    parser.process(argc, argv);
 
     if (geteuid() != 0) {
-        qCritical("cutefish-dm has to run as root");
+        CF_CRITICAL(base::LogCategory::defaultCategory()) << "cutefish-dm has to run as root";
         return 1;
     }
 
     dm::Daemon daemon(dm::Config::load(parser.value(configOption)));
 
     if (signalFd >= 0) {
-        auto *notifier = new QSocketNotifier(signalFd, QSocketNotifier::Read, &app);
-        QObject::connect(notifier, &QSocketNotifier::activated, &app, [signalFd] {
+        loop.watch(signalFd, EPOLLIN, [signalFd, &loop](uint32_t) {
             signalfd_siginfo info;
             while (read(signalFd, &info, sizeof(info)) == sizeof(info)) {
             }
-            QCoreApplication::quit();
+            loop.quit();
         });
     }
 
     if (!daemon.start())
         return 1;
 
-    return app.exec();
+    return loop.run();
 }

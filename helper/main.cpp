@@ -19,10 +19,11 @@
 #include <unistd.h>
 #include <vector>
 
-#include <QJsonArray>
-#include <QJsonObject>
+#include "base/strings.h"
 
 #include "../common/wire.h"
+
+using dm::Json;
 
 static constexpr size_t kMaxLine = 64 * 1024;
 
@@ -108,7 +109,7 @@ static bool groupHasOthers(pid_t leader)
     return found;
 }
 
-static std::optional<QJsonObject> receive()
+static std::optional<Json> receive()
 {
     // A SIGTERM taken outside read() interrupted nothing; the message is not coming.
     if (g_stopRequested)
@@ -136,32 +137,36 @@ static std::optional<QJsonObject> receive()
     if (line.empty())
         return std::nullopt;
 
-    const auto message = dm::decodeLine(QByteArray::fromStdString(line));
-    explicit_bzero(line.data(), line.size());
+    auto message = dm::decodeLine(line);
+    dm::wipe(line);
     return message;
 }
 
-static void send(const QJsonObject &message)
+static void send(const Json &message)
 {
-    const QByteArray bytes = dm::encodeLine(message);
-    qsizetype written = 0;
+    std::string bytes = dm::encodeLine(message);
+    size_t written = 0;
     while (written < bytes.size()) {
-        const ssize_t count = write(STDOUT_FILENO, bytes.constData() + written,
-                                    size_t(bytes.size() - written));
+        const ssize_t count = write(STDOUT_FILENO, bytes.data() + written, bytes.size() - written);
         if (count < 0 && errno == EINTR)
             continue;
         if (count <= 0)
-            return;
+            break;
 
-        written += count;
+        written += size_t(count);
     }
+    dm::wipe(bytes);
 }
 
-static void fail(bool authentication, const QString &message)
+// PAM's text is the system's; the greeter's protocol carries UTF-8.
+static std::string text(const char *message)
 {
-    send({{QStringLiteral("type"), QStringLiteral("error")},
-          {QStringLiteral("auth"), authentication},
-          {QStringLiteral("message"), message}});
+    return cutefish::base::strings::sanitizedUtf8(message ? message : "");
+}
+
+static void fail(bool authentication, const std::string &message)
+{
+    send(Json::object({{"type", "error"}, {"auth", authentication}, {"message", message}}));
 }
 
 static void freeResponses(pam_response *responses, int count)
@@ -198,40 +203,36 @@ static int converse(int count, const pam_message **messages, pam_response **resu
             continue;
         }
 
-        QString style;
+        const char *style = nullptr;
         switch (kind) {
-        case PAM_PROMPT_ECHO_OFF: style = QStringLiteral("secret"); break;
-        case PAM_PROMPT_ECHO_ON: style = QStringLiteral("visible"); break;
-        case PAM_ERROR_MSG: style = QStringLiteral("error"); break;
-        case PAM_TEXT_INFO: style = QStringLiteral("info"); break;
+        case PAM_PROMPT_ECHO_OFF: style = "secret"; break;
+        case PAM_PROMPT_ECHO_ON: style = "visible"; break;
+        case PAM_ERROR_MSG: style = "error"; break;
+        case PAM_TEXT_INFO: style = "info"; break;
         default:
             freeResponses(responses, count);
             return PAM_CONV_ERR;
         }
 
-        send({{QStringLiteral("type"), QStringLiteral("question")},
-              {QStringLiteral("style"), style},
-              {QStringLiteral("text"), QString::fromUtf8(messages[i]->msg)}});
+        send(Json::object({{"type", "question"}, {"style", style}, {"text", text(messages[i]->msg)}}));
 
         auto answer = receive();
-        if (!answer || answer->value(QStringLiteral("type")).toString() != QLatin1String("answer")) {
+        if (!answer || (*answer)["type"].toString() != "answer") {
             freeResponses(responses, count);
             return PAM_CONV_ERR;
         }
 
         if (kind == PAM_PROMPT_ECHO_OFF || kind == PAM_PROMPT_ECHO_ON) {
-            QString text = answer->value(QStringLiteral("response")).toString();
-            QByteArray bytes = text.toUtf8();
-            responses[i].resp = strdup(bytes.constData());
-            dm::wipe(bytes);
-            dm::wipe(text);
+            std::string response = (*answer)["response"].toString();
+            responses[i].resp = strdup(response.c_str());
+            dm::wipe(response);
             if (!responses[i].resp) {
                 freeResponses(responses, count);
                 return PAM_BUF_ERR;
             }
         }
 
-        (*answer)[QStringLiteral("response")] = QJsonValue();
+        answer->insert("response", nullptr);
     }
 
     *result = responses;
@@ -264,11 +265,13 @@ static std::optional<Account> account(pam_handle_t *pam)
     return Account {entry->pw_name, entry->pw_dir, entry->pw_shell, entry->pw_uid, entry->pw_gid};
 }
 
-static std::vector<std::string> strings(const QJsonArray &array)
+static std::vector<std::string> strings(const Json &array)
 {
     std::vector<std::string> result;
-    for (const auto &value : array)
-        result.push_back(value.toString().toStdString());
+    if (!array.isArray())
+        return result;
+    for (const Json &value : array.toArray())
+        result.push_back(value.toString());
     return result;
 }
 
@@ -292,17 +295,17 @@ int main()
     signal(SIGPIPE, SIG_IGN);
 
     const auto login = receive();
-    if (!login || login->value(QStringLiteral("type")).toString() != QLatin1String("login")) {
-        fail(false, QStringLiteral("Expected a login request"));
+    if (!login || (*login)["type"].toString() != "login") {
+        fail(false, "Expected a login request");
         return 1;
     }
 
-    const std::string service = login->value(QStringLiteral("service")).toString().toStdString();
-    const std::string user = login->value(QStringLiteral("user")).toString().toStdString();
-    const bool authenticate = login->value(QStringLiteral("authenticate")).toBool();
-    const int vt = login->value(QStringLiteral("vt")).toInt();
+    const std::string service = (*login)["service"].toString();
+    const std::string user = (*login)["user"].toString();
+    const bool authenticate = (*login)["authenticate"].toBool();
+    const int vt = int((*login)["vt"].toInt());
     if (service.empty() || user.empty() || vt <= 0) {
-        fail(false, QStringLiteral("Incomplete login request"));
+        fail(false, "Incomplete login request");
         return 1;
     }
 
@@ -313,7 +316,7 @@ int main()
     pam_handle_t *pam = nullptr;
     int status = pam_start(service.c_str(), user.c_str(), &conversation, &pam);
     if (status != PAM_SUCCESS) {
-        fail(false, QString::fromUtf8(pam_strerror(pam, status)));
+        fail(false, text(pam_strerror(pam, status)));
         return 1;
     }
 
@@ -327,7 +330,7 @@ int main()
     if (authenticate) {
         status = pam_authenticate(pam, 0);
         if (status != PAM_SUCCESS) {
-            fail(true, QString::fromUtf8(pam_strerror(pam, status)));
+            fail(true, text(pam_strerror(pam, status)));
             return finish(status);
         }
     }
@@ -336,31 +339,31 @@ int main()
     if (status == PAM_NEW_AUTHTOK_REQD)
         status = pam_chauthtok(pam, PAM_CHANGE_EXPIRED_AUTHTOK);
     if (status != PAM_SUCCESS) {
-        fail(true, QString::fromUtf8(pam_strerror(pam, status)));
+        fail(true, text(pam_strerror(pam, status)));
         return finish(status);
     }
 
     status = pam_setcred(pam, PAM_ESTABLISH_CRED);
     if (status != PAM_SUCCESS) {
-        fail(false, QString::fromUtf8(pam_strerror(pam, status)));
+        fail(false, text(pam_strerror(pam, status)));
         return finish(status);
     }
 
     g_conversing = false;
-    send({{QStringLiteral("type"), QStringLiteral("authenticated")}});
+    send(Json::object({{"type", "authenticated"}}));
 
     const auto request = receive();
-    if (!request || request->value(QStringLiteral("type")).toString() != QLatin1String("start")) {
+    if (!request || (*request)["type"].toString() != "start") {
         pam_setcred(pam, PAM_DELETE_CRED);
         g_pam = 0;
         pam_end(pam, PAM_SUCCESS);
         return 0;
     }
 
-    const std::vector<std::string> command = strings(request->value(QStringLiteral("cmd")).toArray());
+    const std::vector<std::string> command = strings((*request)["cmd"]);
     const auto owner = account(pam);
     if (command.empty() || !owner) {
-        fail(false, QStringLiteral("No command or no account to start"));
+        fail(false, "No command or no account to start");
         pam_setcred(pam, PAM_DELETE_CRED);
         return finish(PAM_SESSION_ERR);
     }
@@ -368,7 +371,7 @@ int main()
     // pam_systemd takes the seat, VT, type and class from here.
     const std::string tty = "tty" + std::to_string(vt);
     pam_set_item(pam, PAM_TTY, tty.c_str());
-    for (const std::string &variable : strings(request->value(QStringLiteral("env")).toArray()))
+    for (const std::string &variable : strings((*request)["env"]))
         pam_putenv(pam, variable.c_str());
 
     const std::string home = "HOME=" + owner->home;
@@ -386,7 +389,7 @@ int main()
     g_opening = 1;
     status = pam_open_session(pam, 0);
     if (status != PAM_SUCCESS) {
-        fail(false, QString::fromUtf8(pam_strerror(pam, status)));
+        fail(false, text(pam_strerror(pam, status)));
         pam_setcred(pam, PAM_DELETE_CRED);
         return finish(status);
     }
@@ -433,7 +436,7 @@ int main()
     free(environment);
 
     if (child < 0) {
-        fail(false, QString::fromUtf8(strerror(errno)));
+        fail(false, text(strerror(errno)));
         pam_close_session(pam, 0);
         pam_setcred(pam, PAM_DELETE_CRED);
         return finish(PAM_SESSION_ERR);
@@ -446,9 +449,7 @@ int main()
         raise(SIGTERM);
     }
 
-    send({{QStringLiteral("type"), QStringLiteral("started")},
-          {QStringLiteral("pid"), qint64(child)},
-          {QStringLiteral("session"), QString::fromUtf8(sessionId ? sessionId : "")}});
+    send(Json::object({{"type", "started"}, {"pid", int64_t(child)}, {"session", text(sessionId)}}));
 
     // Not reaped yet, so the deadline can still only hit the session's group.
     siginfo_t exited = {};
@@ -475,8 +476,7 @@ int main()
     g_pam = 0;
     pam_end(pam, PAM_SUCCESS);
 
-    send({{QStringLiteral("type"), QStringLiteral("finished")},
-          {QStringLiteral("status"),
-           WIFEXITED(wait) ? WEXITSTATUS(wait) : 128 + (WIFSIGNALED(wait) ? WTERMSIG(wait) : 0)}});
+    const int exitStatus = WIFEXITED(wait) ? WEXITSTATUS(wait) : 128 + (WIFSIGNALED(wait) ? WTERMSIG(wait) : 0);
+    send(Json::object({{"type", "finished"}, {"status", exitStatus}}));
     return 0;
 }

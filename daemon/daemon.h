@@ -1,12 +1,13 @@
 #pragma once
 
-#include <QDBusMessage>
-#include <QList>
-#include <QObject>
-#include <QTimer>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
+
+#include "base/dbus.h"
+#include "base/timer.h"
 
 #include "config.h"
 #include "greeterserver.h"
@@ -16,24 +17,25 @@
 namespace dm {
 
 // Runs the login screen and the session on VTs of their own; see README.md.
-class Daemon : public QObject
+class Daemon
 {
-    Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "com.cutefish.DisplayManager")
 public:
-    explicit Daemon(Config config, QObject *parent = nullptr);
-    ~Daemon() override;
+    explicit Daemon(Config config);
+    ~Daemon();
+
+    Daemon(const Daemon &) = delete;
+    Daemon &operator=(const Daemon &) = delete;
 
     bool start();
 
-public Q_SLOTS:
-    // Called by the session before it ends; replies once the login screen is up.
-    Q_SCRIPTABLE void SwitchToGreeter(const QDBusMessage &message);
+    // com.cutefish.DisplayManager.SwitchToGreeter: called by the session
+    // before it ends; replies once the login screen is up.
+    void switchToGreeter(cutefish::base::dbus::MethodCall &call);
 
 private:
     struct PendingStart {
-        QStringList command;
-        QStringList environment;
+        std::vector<std::string> command;
+        std::vector<std::string> environment;
     };
 
     void startGreeter();
@@ -43,10 +45,10 @@ private:
     void onGreeterFinished();
     void replySwitchRequests(bool switched);
 
-    void createSession(const QString &username);
-    void postAuthMessageResponse(const QJsonValue &response);
-    void startSession(const QStringList &command, const QStringList &environment,
-                      const QString &session);
+    void createSession(const std::string &username);
+    void postAuthMessageResponse(const Json &response);
+    void startSession(const std::vector<std::string> &command, const std::vector<std::string> &environment,
+                      const std::string &session);
     void cancelSession();
     void launchSession(PendingStart start);
     void onSessionFinished();
@@ -54,18 +56,22 @@ private:
     // then(true) once logind has taken `vt` for the helper's session, then(false)
     // after a timeout; nothing runs once the helper is released.
     void whenControlled(HelperProcess *helper, int vt, std::function<void(bool)> then);
-    // HelperProcess objects end in their own signals; they are released later.
-    static void release(std::unique_ptr<HelperProcess> &helper);
+    // HelperProcess objects end in their own callbacks; they are destroyed later.
+    void release(std::unique_ptr<HelperProcess> &helper);
 
     Config m_config;
     State m_state;
     GreeterServer m_server;
+    cutefish::base::dbus::Connection *m_bus = nullptr;
+    std::unique_ptr<cutefish::base::dbus::Object> m_object;
     std::unique_ptr<HelperProcess> m_greeter;
     std::unique_ptr<HelperProcess> m_login;
     std::unique_ptr<HelperProcess> m_session;
+    std::vector<std::unique_ptr<HelperProcess>> m_released;
     std::optional<PendingStart> m_pendingStart;
-    QList<QDBusMessage> m_switchRequests;
-    QTimer m_greeterRestart;
+    std::vector<cutefish::base::dbus::MethodCall> m_switchRequests;
+    cutefish::base::Timer m_greeterRestart;
+    std::vector<std::unique_ptr<cutefish::base::Timer>> m_lingers;
     int m_greeterFailures = 0;
     bool m_greeterExpected = false;
     // The login screen has handed a login over and cannot take another.
@@ -73,6 +79,7 @@ private:
     bool m_restartGreeter = false;
     bool m_bootSplash = false;
     bool m_stopping = false;
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
 };
 
 } // namespace dm

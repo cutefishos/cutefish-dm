@@ -1,14 +1,18 @@
-#include <QCoreApplication>
-#include <QFile>
-#include <QJsonArray>
-#include <QLocalSocket>
-#include <QSettings>
-#include <QSignalSpy>
-#include <QTemporaryDir>
-#include <QTest>
+#include <gtest/gtest.h>
 
+#include <chrono>
 #include <csignal>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <poll.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+#include "base/event_loop.h"
+#include "base/file.h"
+#include "base/local_socket.h"
+#include "base/settings.h"
 
 #include "common/wire.h"
 #include "daemon/config.h"
@@ -17,368 +21,433 @@
 #include "daemon/sessions.h"
 #include "daemon/state.h"
 
+using namespace cutefish;
+using namespace std::chrono_literals;
+using dm::Json;
+
 // When set, the test binary is the helper: it accepts "right" and its session
 // runs until terminated, or, set to "stubborn", ignores SIGTERM.
 static constexpr char kFakeHelper[] = "DM_TEST_FAKE_HELPER";
 
-static QByteArray readLine()
+static base::EventLoop *g_loop = nullptr;
+
+static std::string readLine()
 {
-    QByteArray line;
+    std::string line;
     char c = 0;
     while (read(STDIN_FILENO, &c, 1) == 1 && c != '\n')
-        line.append(c);
+        line += c;
     return line;
 }
 
-static void writeLine(const QJsonObject &message)
+static void writeLine(const Json &message)
 {
-    const QByteArray bytes = dm::encodeLine(message);
-    if (write(STDOUT_FILENO, bytes.constData(), size_t(bytes.size())) != bytes.size())
+    const std::string bytes = dm::encodeLine(message);
+    if (write(STDOUT_FILENO, bytes.data(), bytes.size()) != ssize_t(bytes.size()))
         _exit(3);
 }
 
-static int fakeHelper()
+static int fakeHelper(const char *mode)
 {
     const auto login = dm::decodeLine(readLine());
-    if (!login || login->value(QStringLiteral("user")).toString() != QLatin1String("alice"))
+    if (!login || (*login)["user"].toString() != "alice")
         return 2;
 
-    writeLine({{QStringLiteral("type"), QStringLiteral("question")},
-               {QStringLiteral("style"), QStringLiteral("secret")},
-               {QStringLiteral("text"), QStringLiteral("Password:")}});
+    writeLine(Json::object({{"type", "question"}, {"style", "secret"}, {"text", "Password:"}}));
     const auto answer = dm::decodeLine(readLine());
-    if (!answer || answer->value(QStringLiteral("response")).toString() != QLatin1String("right")) {
-        writeLine({{QStringLiteral("type"), QStringLiteral("error")},
-                   {QStringLiteral("auth"), true},
-                   {QStringLiteral("message"), QStringLiteral("Authentication failure")}});
+    if (!answer || (*answer)["response"].toString() != "right") {
+        writeLine(Json::object({{"type", "error"}, {"auth", true}, {"message", "Authentication failure"}}));
         return 1;
     }
 
-    writeLine({{QStringLiteral("type"), QStringLiteral("authenticated")}});
+    writeLine(Json::object({{"type", "authenticated"}}));
 
     const auto start = dm::decodeLine(readLine());
-    if (!start || start->value(QStringLiteral("cmd")).toArray().isEmpty())
+    if (!start || !(*start)["cmd"].isArray() || (*start)["cmd"].toArray().empty())
         return 0;
 
-    if (qgetenv(kFakeHelper) == "stubborn")
+    if (std::strcmp(mode, "stubborn") == 0)
         signal(SIGTERM, SIG_IGN);
 
-    writeLine({{QStringLiteral("type"), QStringLiteral("started")},
-               {QStringLiteral("pid"), qint64(getpid())},
-               {QStringLiteral("session"), QStringLiteral("42")}});
+    writeLine(Json::object({{"type", "started"}, {"pid", int64_t(getpid())}, {"session", "42"}}));
 
     for (;;)
         pause();
 }
 
-static QByteArray frame(const QJsonObject &message)
+// Runs the loop until done() holds or the timeout passes; returns done().
+static bool runUntil(const std::function<bool()> &done, std::chrono::milliseconds timeout = 5s)
 {
-    return dm::encodeFrame(message);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    g_loop->dispatch();
+    while (!done()) {
+        if (std::chrono::steady_clock::now() >= deadline)
+            return done();
+        pollfd ready {g_loop->fd(), POLLIN, 0};
+        poll(&ready, 1, 5);
+        g_loop->dispatch();
+    }
+    return true;
 }
 
-static void writeFile(const QString &path, const QByteArray &contents)
+static void runFor(std::chrono::milliseconds duration)
 {
-    QFile file(path);
-    QVERIFY(file.open(QIODevice::WriteOnly));
-    file.write(contents);
+    runUntil([] { return false; }, duration);
 }
 
-class DisplayManagerTest : public QObject
+static void writeFile(const std::string &path, const std::string &contents)
 {
-    Q_OBJECT
-private slots:
+    ASSERT_TRUE(base::file::writeAtomically(path, contents));
+}
 
-    void framesSurviveSplitsAndBatches()
-    {
-        const QByteArray first = frame({{QStringLiteral("type"), QStringLiteral("success")}});
-        const QByteArray second = frame({{QStringLiteral("type"), QStringLiteral("cancel_session")}});
-        dm::FrameReader reader;
-        reader.append(first.left(3));
-        QVERIFY(!reader.next());
-        reader.append(first.mid(3) + second);
-        const auto a = reader.next();
-        const auto b = reader.next();
-        QVERIFY(a && b);
-        QCOMPARE(a->value(QStringLiteral("type")).toString(), QStringLiteral("success"));
-        QCOMPARE(b->value(QStringLiteral("type")).toString(), QStringLiteral("cancel_session"));
-        QVERIFY(!reader.next());
-        QVERIFY(!reader.failed());
-    }
+static std::string selfPath()
+{
+    char path[4096] = {};
+    const ssize_t length = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    return length > 0 ? std::string(path, size_t(length)) : std::string();
+}
 
-    void oversizedOrMalformedFramesFailTheReader()
-    {
-        dm::FrameReader oversized;
-        const quint32 length = dm::kMaxFrameSize + 1;
-        oversized.append(QByteArray(reinterpret_cast<const char *>(&length), sizeof(length)));
-        QVERIFY(!oversized.next());
-        QVERIFY(oversized.failed());
-
-        dm::FrameReader malformed;
-        const QByteArray payload("[1,2]");
-        const quint32 size = quint32(payload.size());
-        malformed.append(QByteArray(reinterpret_cast<const char *>(&size), sizeof(size)) + payload);
-        QVERIFY(!malformed.next());
-        QVERIFY(malformed.failed());
-    }
-
-    void linesRoundTrip()
-    {
-        const QJsonObject message {{QStringLiteral("type"), QStringLiteral("answer")},
-                                   {QStringLiteral("response"), QJsonValue()}};
-        const QByteArray line = dm::encodeLine(message);
-        QVERIFY(line.endsWith('\n'));
-        QCOMPARE(line.count('\n'), 1);
-        QCOMPARE(*dm::decodeLine(line), message);
-        QVERIFY(!dm::decodeLine("not json"));
-    }
-
-    void sessionFilesParse()
-    {
-        QTemporaryDir directory;
-        writeFile(directory.filePath(QStringLiteral("plasma.desktop")),
-                  "[Desktop Entry]\n"
-                  "# a comment\n"
-                  "Name=Plasma (Wayland)\n"
-                  "Comment=Plasma by KDE\n"
-                  "Exec=/usr/bin/startplasma-wayland --arg \"two words\" %f\n"
-                  "DesktopNames=KDE;Plasma;\n"
-                  "[Other Group]\n"
-                  "Exec=ignored\n");
-        const auto entry = dm::readSessionFile(directory.filePath(QStringLiteral("plasma.desktop")));
-        QVERIFY(entry);
-        QCOMPARE(entry->id, QStringLiteral("plasma"));
-        QCOMPARE(entry->name, QStringLiteral("Plasma (Wayland)"));
-        QCOMPARE(entry->exec, (QStringList {QStringLiteral("/usr/bin/startplasma-wayland"),
-                                            QStringLiteral("--arg"), QStringLiteral("two words")}));
-        QCOMPARE(entry->desktopNames, (QStringList {QStringLiteral("KDE"), QStringLiteral("Plasma")}));
-    }
-
-    void hiddenMissingOrCommandlessSessionsAreNotOffered()
-    {
-        QTemporaryDir directory;
-        writeFile(directory.filePath(QStringLiteral("hidden.desktop")),
-                  "[Desktop Entry]\nName=Hidden\nExec=/bin/true\nHidden=true\n");
-        writeFile(directory.filePath(QStringLiteral("nodisplay.desktop")),
-                  "[Desktop Entry]\nName=NoDisplay\nExec=/bin/true\nNoDisplay=true\n");
-        writeFile(directory.filePath(QStringLiteral("missing.desktop")),
-                  "[Desktop Entry]\nName=Missing\nExec=/bin/true\nTryExec=/nonexistent/program\n");
-        writeFile(directory.filePath(QStringLiteral("noexec.desktop")),
-                  "[Desktop Entry]\nName=NoExec\n");
-        writeFile(directory.filePath(QStringLiteral("good.desktop")),
-                  "[Desktop Entry]\nName=Good\nExec=/bin/true\nTryExec=true\n");
-        const auto sessions = dm::findSessions({directory.path()});
-        QCOMPARE(sessions.size(), 1);
-        QCOMPARE(sessions.first().id, QStringLiteral("good"));
-    }
-
-    void earlierDirectoriesWinAndIdsNameFilesOnly()
-    {
-        QTemporaryDir local, system;
-        writeFile(local.filePath(QStringLiteral("cutefish.desktop")),
-                  "[Desktop Entry]\nName=Local\nExec=/bin/true\n");
-        writeFile(system.filePath(QStringLiteral("cutefish.desktop")),
-                  "[Desktop Entry]\nName=System\nExec=/bin/false\n");
-        writeFile(local.filePath(QStringLiteral("gnome.desktop")),
-                  "[Desktop Entry]\nName=GNOME\nExec=/bin/true\nHidden=true\n");
-        writeFile(system.filePath(QStringLiteral("gnome.desktop")),
-                  "[Desktop Entry]\nName=GNOME\nExec=/bin/true\n");
-        const QStringList directories {local.path(), system.path()};
-        QCOMPARE(dm::findSession(directories, QStringLiteral("cutefish"))->name,
-                 QStringLiteral("Local"));
-        // A hidden local entry masks the system one.
-        QVERIFY(!dm::findSession(directories, QStringLiteral("gnome")));
-        QVERIFY(!dm::findSession(directories, QStringLiteral("../cutefish")));
-        QVERIFY(!dm::findSession(directories, QStringLiteral(".hidden")));
-        QVERIFY(!dm::findSession(directories, QString()));
-    }
-
-    void environmentsCarryWhatPamSystemdReads()
-    {
-        dm::SessionEntry gnome;
-        gnome.id = QStringLiteral("gnome");
-        gnome.desktopNames = {QStringLiteral("GNOME")};
-        const QStringList session = dm::sessionEnvironment(gnome, 2);
-        QVERIFY(session.contains(QStringLiteral("XDG_SESSION_TYPE=wayland")));
-        QVERIFY(session.contains(QStringLiteral("XDG_SESSION_CLASS=user")));
-        QVERIFY(session.contains(QStringLiteral("XDG_SEAT=seat0")));
-        QVERIFY(session.contains(QStringLiteral("XDG_VTNR=2")));
-        QVERIFY(session.contains(QStringLiteral("DESKTOP_SESSION=gnome")));
-        QVERIFY(session.contains(QStringLiteral("XDG_SESSION_DESKTOP=GNOME")));
-        QVERIFY(session.contains(QStringLiteral("XDG_CURRENT_DESKTOP=GNOME")));
-
-        const QStringList bare = dm::sessionEnvironment(dm::SessionEntry {}, 2);
-        QVERIFY(bare.contains(QStringLiteral("XDG_SESSION_TYPE=wayland")));
-        for (const QString &variable : bare)
-            QVERIFY(!variable.startsWith(QLatin1String("DESKTOP_SESSION=")));
-
-        const QStringList greeter = dm::greeterEnvironment(1, QStringLiteral("/run/x.sock"));
-        QVERIFY(greeter.contains(QStringLiteral("XDG_SESSION_CLASS=greeter")));
-        QVERIFY(greeter.contains(QStringLiteral("XDG_VTNR=1")));
-        QVERIFY(greeter.contains(QStringLiteral("GREETD_SOCK=/run/x.sock")));
-    }
-
-    void stateRemembersTheLastLogin()
-    {
-        QTemporaryDir directory;
-        const QString path = directory.filePath(QStringLiteral("state/state.conf"));
-        dm::State state(path);
-        QVERIFY(!QFile::exists(path));
-        state.remember(QStringLiteral("alice"), QStringLiteral("gnome"));
-        state.remember(QStringLiteral("bob"), QStringLiteral("cutefish-wayland"));
-        // The keys the login screen reads.
-        const QSettings reread(path, QSettings::IniFormat);
-        QCOMPARE(reread.value(QStringLiteral("Last/User")).toString(), QStringLiteral("bob"));
-        QCOMPARE(reread.value(QStringLiteral("Sessions/alice")).toString(), QStringLiteral("gnome"));
-        QCOMPARE(reread.value(QStringLiteral("Sessions/bob")).toString(),
-                 QStringLiteral("cutefish-wayland"));
-    }
-
-    void configFallsBackToDefaults()
-    {
-        const dm::Config defaults = dm::Config::load(QStringLiteral("/nonexistent/dm.conf"));
-        QCOMPARE(defaults.greeterVt, 1);
-        QCOMPARE(defaults.sessionVt, 2);
-        QCOMPARE(defaults.greeterUser, QStringLiteral("cutefish-greeter"));
-
-        QTemporaryDir directory;
-        writeFile(directory.filePath(QStringLiteral("dm.conf")),
-                  "[Greeter]\nVt=8\nCommand=/usr/bin/cutefish-compositor --login --no-xwayland\n"
-                  "[Session]\nVt=9\n[Daemon]\nRuntimeDirectory=/run/test\n");
-        const dm::Config config = dm::Config::load(directory.filePath(QStringLiteral("dm.conf")));
-        QCOMPARE(config.greeterVt, 8);
-        QCOMPARE(config.sessionVt, 9);
-        QCOMPARE(config.greeterCommand.last(), QStringLiteral("--no-xwayland"));
-        QCOMPARE(config.runtimeDirectory, QStringLiteral("/run/test"));
-        QCOMPARE(config.greeterUser, QStringLiteral("cutefish-greeter"));
-    }
-
-    void greeterServerSpeaksGreetd()
-    {
-        QTemporaryDir directory;
-        const QString path = directory.filePath(QStringLiteral("greeter.sock"));
-        dm::GreeterServer server;
-        QVERIFY(server.listen(path, getuid()));
-        QCOMPARE(QFile::permissions(path) & (QFile::ReadGroup | QFile::ReadOther), QFileDevice::Permissions());
-
-        QSignalSpy created(&server, &dm::GreeterServer::createSession);
-        QSignalSpy started(&server, &dm::GreeterServer::startSession);
-        QLocalSocket client;
-        client.connectToServer(path);
-        QVERIFY(client.waitForConnected(1000));
-
-        // Two requests at once: the second waits for the first's answer.
-        client.write(frame({{QStringLiteral("type"), QStringLiteral("create_session")},
-                            {QStringLiteral("username"), QStringLiteral("alice")}}));
-        client.write(frame({{QStringLiteral("type"), QStringLiteral("start_session")},
-                            {QStringLiteral("cmd"), QJsonArray {}},
-                            {QStringLiteral("env"), QJsonArray {QStringLiteral("LANG=C")}},
-                            {QStringLiteral("session"), QStringLiteral("gnome")}}));
-        client.flush();
-        QTRY_COMPARE(created.count(), 1);
-        QCOMPARE(created.first().first().toString(), QStringLiteral("alice"));
-        QTest::qWait(50);
-        QCOMPARE(started.count(), 0);
-
-        server.respond(dm::GreeterServer::authMessage(QStringLiteral("secret"), QStringLiteral("Password:")));
-        QTRY_COMPARE(started.count(), 1);
-        QCOMPARE(started.first().at(1).toStringList(), QStringList {QStringLiteral("LANG=C")});
-        QCOMPARE(started.first().at(2).toString(), QStringLiteral("gnome"));
-        server.respond(dm::GreeterServer::success());
-
-        dm::FrameReader reader;
-        QList<QJsonObject> responses;
-        QTRY_VERIFY([&] {
-            reader.append(client.readAll());
-            while (auto response = reader.next())
-                responses.append(*response);
-            return responses.size() == 2;
-        }());
-        QCOMPARE(responses[0].value(QStringLiteral("type")).toString(), QStringLiteral("auth_message"));
-        QCOMPARE(responses[0].value(QStringLiteral("auth_message_type")).toString(),
-                 QStringLiteral("secret"));
-        QCOMPARE(responses[1].value(QStringLiteral("type")).toString(), QStringLiteral("success"));
-    }
-
-    void helperProtocolRunsALogin()
-    {
-        qputenv("CUTEFISH_DM_HELPER", QCoreApplication::applicationFilePath().toLocal8Bit());
-        qputenv(kFakeHelper, "1");
-        dm::HelperProcess helper;
-        QSignalSpy questions(&helper, &dm::HelperProcess::question);
-        QSignalSpy authenticated(&helper, &dm::HelperProcess::authenticated);
-        QSignalSpy started(&helper, &dm::HelperProcess::started);
-        QSignalSpy finished(&helper, &dm::HelperProcess::finished);
-
-        helper.login(QStringLiteral("cutefish-dm"), QStringLiteral("alice"), true, 2);
-        QTRY_COMPARE(questions.count(), 1);
-        QCOMPARE(questions.first().first().toString(), QStringLiteral("secret"));
-        helper.answer(QStringLiteral("right"));
-        QTRY_COMPARE(authenticated.count(), 1);
-        QVERIFY(helper.isAuthenticated());
-        helper.start({QStringLiteral("/bin/true")}, {QStringLiteral("XDG_VTNR=2")});
-        QTRY_COMPARE(started.count(), 1);
-        QCOMPARE(helper.sessionId(), QStringLiteral("42"));
-        QVERIFY(helper.hasStarted());
-        helper.terminate();
-        QTRY_COMPARE(finished.count(), 1);
-
-        qunsetenv(kFakeHelper);
-    }
-
-    void aHelperIgnoringTerminationIsKilledAtTheDeadline()
-    {
-        qputenv("CUTEFISH_DM_HELPER", QCoreApplication::applicationFilePath().toLocal8Bit());
-        qputenv(kFakeHelper, "stubborn");
-        dm::HelperProcess helper;
-        helper.setStopTimeout(300);
-        QSignalSpy questions(&helper, &dm::HelperProcess::question);
-        QSignalSpy authenticated(&helper, &dm::HelperProcess::authenticated);
-        QSignalSpy started(&helper, &dm::HelperProcess::started);
-        QSignalSpy finished(&helper, &dm::HelperProcess::finished);
-
-        helper.login(QStringLiteral("cutefish-dm"), QStringLiteral("alice"), true, 2);
-        QTRY_COMPARE(questions.count(), 1);
-        helper.answer(QStringLiteral("right"));
-        QTRY_COMPARE(authenticated.count(), 1);
-        helper.start({QStringLiteral("/bin/true")}, {QStringLiteral("XDG_VTNR=2")});
-        QTRY_COMPARE(started.count(), 1);
-        helper.terminate();
-        QTest::qWait(150);
-        QCOMPARE(finished.count(), 0);
-        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 2000);
-
-        qunsetenv(kFakeHelper);
-    }
-
-    void helperReportsAWrongPassword()
-    {
-        qputenv("CUTEFISH_DM_HELPER", QCoreApplication::applicationFilePath().toLocal8Bit());
-        qputenv(kFakeHelper, "1");
-        dm::HelperProcess helper;
-        QSignalSpy failed(&helper, &dm::HelperProcess::failed);
-        QSignalSpy finished(&helper, &dm::HelperProcess::finished);
-        QSignalSpy questions(&helper, &dm::HelperProcess::question);
-
-        helper.login(QStringLiteral("cutefish-dm"), QStringLiteral("alice"), true, 2);
-        QTRY_COMPARE(questions.count(), 1);
-        helper.answer(QStringLiteral("wrong"));
-        QTRY_COMPARE(finished.count(), 1);
-        QCOMPARE(failed.count(), 1);
-        QVERIFY(failed.first().first().toBool());
-        QVERIFY(!helper.isAuthenticated());
-
-        qunsetenv(kFakeHelper);
-    }
+class DisplayManagerTest : public ::testing::Test
+{
+protected:
+    base::file::TemporaryDirectory directory {"/tmp", "dm-test"};
 };
 
-int main(int argc, char *argv[])
+TEST(WireTest, FramesSurviveSplitsAndBatches)
 {
-    if (qEnvironmentVariableIsSet(kFakeHelper))
-        return fakeHelper();
-
-    QCoreApplication app(argc, argv);
-    DisplayManagerTest test;
-    return QTest::qExec(&test, argc, argv);
+    const std::string first = dm::encodeFrame(Json::object({{"type", "success"}}));
+    const std::string second = dm::encodeFrame(Json::object({{"type", "cancel_session"}}));
+    dm::FrameReader reader;
+    reader.append(first.substr(0, 3));
+    EXPECT_FALSE(reader.next());
+    reader.append(first.substr(3) + second);
+    const auto a = reader.next();
+    const auto b = reader.next();
+    ASSERT_TRUE(a && b);
+    EXPECT_EQ((*a)["type"].toString(), "success");
+    EXPECT_EQ((*b)["type"].toString(), "cancel_session");
+    EXPECT_FALSE(reader.next());
+    EXPECT_FALSE(reader.failed());
 }
 
-#include "dm_test.moc"
+TEST(WireTest, OversizedOrMalformedFramesFailTheReader)
+{
+    dm::FrameReader oversized;
+    const uint32_t length = dm::kMaxFrameSize + 1;
+    oversized.append(std::string(reinterpret_cast<const char *>(&length), sizeof(length)));
+    EXPECT_FALSE(oversized.next());
+    EXPECT_TRUE(oversized.failed());
+
+    dm::FrameReader malformed;
+    const std::string payload("[1,2]");
+    const uint32_t size = uint32_t(payload.size());
+    malformed.append(std::string(reinterpret_cast<const char *>(&size), sizeof(size)) + payload);
+    EXPECT_FALSE(malformed.next());
+    EXPECT_TRUE(malformed.failed());
+}
+
+TEST(WireTest, LinesRoundTrip)
+{
+    const Json message = Json::object({{"type", "answer"}, {"response", nullptr}});
+    const std::string line = dm::encodeLine(message);
+    EXPECT_EQ(line.back(), '\n');
+    EXPECT_EQ(std::count(line.begin(), line.end(), '\n'), 1);
+    EXPECT_EQ(*dm::decodeLine(line), message);
+    EXPECT_FALSE(dm::decodeLine("not json"));
+}
+
+TEST_F(DisplayManagerTest, SessionFilesParse)
+{
+    writeFile(directory.path() + "/plasma.desktop",
+              "[Desktop Entry]\n"
+              "# a comment\n"
+              "Name=Plasma (Wayland)\n"
+              "Comment=Plasma by KDE\n"
+              "Exec=/usr/bin/startplasma-wayland --arg \"two words\" %f\n"
+              "DesktopNames=KDE;Plasma;\n"
+              "[Other Group]\n"
+              "Exec=ignored\n");
+    const auto entry = dm::readSessionFile(directory.path() + "/plasma.desktop");
+    ASSERT_TRUE(entry);
+    EXPECT_EQ(entry->id, "plasma");
+    EXPECT_EQ(entry->name, "Plasma (Wayland)");
+    EXPECT_EQ(entry->exec, (std::vector<std::string> {"/usr/bin/startplasma-wayland", "--arg", "two words"}));
+    EXPECT_EQ(entry->desktopNames, (std::vector<std::string> {"KDE", "Plasma"}));
+}
+
+TEST_F(DisplayManagerTest, HiddenMissingOrCommandlessSessionsAreNotOffered)
+{
+    writeFile(directory.path() + "/hidden.desktop", "[Desktop Entry]\nName=Hidden\nExec=/bin/true\nHidden=true\n");
+    writeFile(directory.path() + "/nodisplay.desktop",
+              "[Desktop Entry]\nName=NoDisplay\nExec=/bin/true\nNoDisplay=true\n");
+    writeFile(directory.path() + "/missing.desktop",
+              "[Desktop Entry]\nName=Missing\nExec=/bin/true\nTryExec=/nonexistent/program\n");
+    writeFile(directory.path() + "/noexec.desktop", "[Desktop Entry]\nName=NoExec\n");
+    writeFile(directory.path() + "/good.desktop", "[Desktop Entry]\nName=Good\nExec=/bin/true\nTryExec=true\n");
+    const auto sessions = dm::findSessions({directory.path()});
+    ASSERT_EQ(sessions.size(), 1u);
+    EXPECT_EQ(sessions.front().id, "good");
+}
+
+TEST_F(DisplayManagerTest, EarlierDirectoriesWinAndIdsNameFilesOnly)
+{
+    base::file::TemporaryDirectory system("/tmp", "dm-test");
+    writeFile(directory.path() + "/cutefish.desktop", "[Desktop Entry]\nName=Local\nExec=/bin/true\n");
+    writeFile(system.path() + "/cutefish.desktop", "[Desktop Entry]\nName=System\nExec=/bin/false\n");
+    writeFile(directory.path() + "/gnome.desktop", "[Desktop Entry]\nName=GNOME\nExec=/bin/true\nHidden=true\n");
+    writeFile(system.path() + "/gnome.desktop", "[Desktop Entry]\nName=GNOME\nExec=/bin/true\n");
+    const std::vector<std::string> directories {directory.path(), system.path()};
+    EXPECT_EQ(dm::findSession(directories, "cutefish")->name, "Local");
+    // A hidden local entry masks the system one.
+    EXPECT_FALSE(dm::findSession(directories, "gnome"));
+    EXPECT_FALSE(dm::findSession(directories, "../cutefish"));
+    EXPECT_FALSE(dm::findSession(directories, ".hidden"));
+    EXPECT_FALSE(dm::findSession(directories, ""));
+}
+
+TEST(SessionTest, EnvironmentsCarryWhatPamSystemdReads)
+{
+    const auto contains = [](const std::vector<std::string> &list, const std::string &value) {
+        return std::find(list.begin(), list.end(), value) != list.end();
+    };
+
+    dm::SessionEntry gnome;
+    gnome.id = "gnome";
+    gnome.desktopNames = {"GNOME"};
+    const auto session = dm::sessionEnvironment(gnome, 2);
+    EXPECT_TRUE(contains(session, "XDG_SESSION_TYPE=wayland"));
+    EXPECT_TRUE(contains(session, "XDG_SESSION_CLASS=user"));
+    EXPECT_TRUE(contains(session, "XDG_SEAT=seat0"));
+    EXPECT_TRUE(contains(session, "XDG_VTNR=2"));
+    EXPECT_TRUE(contains(session, "DESKTOP_SESSION=gnome"));
+    EXPECT_TRUE(contains(session, "XDG_SESSION_DESKTOP=GNOME"));
+    EXPECT_TRUE(contains(session, "XDG_CURRENT_DESKTOP=GNOME"));
+
+    const auto bare = dm::sessionEnvironment(dm::SessionEntry {}, 2);
+    EXPECT_TRUE(contains(bare, "XDG_SESSION_TYPE=wayland"));
+    for (const std::string &variable : bare)
+        EXPECT_NE(variable.rfind("DESKTOP_SESSION=", 0), 0u);
+
+    const auto greeter = dm::greeterEnvironment(1, "/run/x.sock");
+    EXPECT_TRUE(contains(greeter, "XDG_SESSION_CLASS=greeter"));
+    EXPECT_TRUE(contains(greeter, "XDG_VTNR=1"));
+    EXPECT_TRUE(contains(greeter, "GREETD_SOCK=/run/x.sock"));
+}
+
+TEST_F(DisplayManagerTest, StateRemembersTheLastLogin)
+{
+    const std::string path = directory.path() + "/state/state.conf";
+    dm::State state(path);
+    EXPECT_NE(access(path.c_str(), F_OK), 0);
+    state.remember("alice", "gnome");
+    state.remember("bob", "cutefish-wayland");
+    // The keys the login screen reads.
+    const base::Settings reread(path);
+    EXPECT_EQ(reread.stringValue("Last/User"), "bob");
+    EXPECT_EQ(reread.stringValue("Sessions/alice"), "gnome");
+    EXPECT_EQ(reread.stringValue("Sessions/bob"), "cutefish-wayland");
+    EXPECT_EQ(base::file::read(path).value_or(""),
+              "[Last]\nUser=bob\n\n[Sessions]\nalice=gnome\nbob=cutefish-wayland\n");
+    // The login screen reads it as its own user.
+    struct stat info = {};
+    ASSERT_EQ(stat(path.c_str(), &info), 0);
+    EXPECT_TRUE(info.st_mode & S_IROTH);
+}
+
+TEST_F(DisplayManagerTest, ConfigFallsBackToDefaults)
+{
+    const dm::Config defaults = dm::Config::load("/nonexistent/dm.conf");
+    EXPECT_EQ(defaults.greeterVt, 1);
+    EXPECT_EQ(defaults.sessionVt, 2);
+    EXPECT_EQ(defaults.greeterUser, "cutefish-greeter");
+    EXPECT_EQ(defaults.greeterCommand, (std::vector<std::string> {"/usr/bin/cutefish-compositor", "--login"}));
+
+    writeFile(directory.path() + "/dm.conf",
+              "[Greeter]\nVt=8\nCommand=/usr/bin/cutefish-compositor --login --no-xwayland\n"
+              "[Session]\nVt=9\nDirectories=/a::/b\n[Daemon]\nRuntimeDirectory=/run/test\n");
+    const dm::Config config = dm::Config::load(directory.path() + "/dm.conf");
+    EXPECT_EQ(config.greeterVt, 8);
+    EXPECT_EQ(config.sessionVt, 9);
+    EXPECT_EQ(config.greeterCommand.back(), "--no-xwayland");
+    EXPECT_EQ(config.sessionDirectories, (std::vector<std::string> {"/a", "/b"}));
+    EXPECT_EQ(config.runtimeDirectory, "/run/test");
+    EXPECT_EQ(config.greeterUser, "cutefish-greeter");
+}
+
+TEST(ConfigTest, CommandsSplitAsTheConfigurationAlwaysHas)
+{
+    EXPECT_EQ(dm::splitCommand("a  b\tc"), (std::vector<std::string> {"a", "b", "c"}));
+    EXPECT_EQ(dm::splitCommand("a \"b c\" d"), (std::vector<std::string> {"a", "b c", "d"}));
+    EXPECT_EQ(dm::splitCommand("say \"\"\"hi\"\"\""), (std::vector<std::string> {"say", "\"hi\""}));
+    EXPECT_EQ(dm::splitCommand("x\"y z\"w"), (std::vector<std::string> {"xy zw"}));
+    EXPECT_EQ(dm::splitCommand("\"\" a"), (std::vector<std::string> {"a"}));
+    EXPECT_TRUE(dm::splitCommand("   ").empty());
+}
+
+TEST_F(DisplayManagerTest, GreeterServerSpeaksGreetd)
+{
+    const std::string path = directory.path() + "/greeter.sock";
+    dm::GreeterServer server;
+    ASSERT_TRUE(server.listen(path, getuid()));
+    struct stat info = {};
+    ASSERT_EQ(stat(path.c_str(), &info), 0);
+    EXPECT_EQ(info.st_mode & (S_IRGRP | S_IROTH | S_IWGRP | S_IWOTH), 0u);
+
+    std::vector<std::string> created;
+    std::vector<std::tuple<std::vector<std::string>, std::vector<std::string>, std::string>> started;
+    server.onCreateSession = [&](const std::string &username) { created.push_back(username); };
+    server.onStartSession = [&](const std::vector<std::string> &command, const std::vector<std::string> &environment,
+                                const std::string &session) { started.emplace_back(command, environment, session); };
+
+    base::LocalSocket client(g_loop);
+    ASSERT_TRUE(client.connectToPath(path));
+
+    // Two requests at once: the second waits for the first's answer.
+    client.write(dm::encodeFrame(Json::object({{"type", "create_session"}, {"username", "alice"}})));
+    client.write(dm::encodeFrame(Json::object({{"type", "start_session"},
+                                               {"cmd", Json::Array {}},
+                                               {"env", Json::Array {Json("LANG=C")}},
+                                               {"session", "gnome"}})));
+    ASSERT_TRUE(runUntil([&] { return created.size() == 1; }));
+    EXPECT_EQ(created.front(), "alice");
+    runFor(50ms);
+    EXPECT_TRUE(started.empty());
+
+    server.respond(dm::GreeterServer::authMessage("secret", "Password:"));
+    ASSERT_TRUE(runUntil([&] { return started.size() == 1; }));
+    EXPECT_EQ(std::get<1>(started.front()), std::vector<std::string> {"LANG=C"});
+    EXPECT_EQ(std::get<2>(started.front()), "gnome");
+    server.respond(dm::GreeterServer::success());
+
+    dm::FrameReader reader;
+    std::vector<Json> responses;
+    ASSERT_TRUE(runUntil([&] {
+        reader.append(client.readAll());
+        while (auto response = reader.next())
+            responses.push_back(*response);
+        return responses.size() == 2;
+    }));
+    EXPECT_EQ(responses[0]["type"].toString(), "auth_message");
+    EXPECT_EQ(responses[0]["auth_message_type"].toString(), "secret");
+    EXPECT_EQ(responses[1]["type"].toString(), "success");
+}
+
+TEST_F(DisplayManagerTest, GreeterServerDropsAMalformedClient)
+{
+    const std::string path = directory.path() + "/greeter.sock";
+    dm::GreeterServer server;
+    ASSERT_TRUE(server.listen(path, getuid()));
+    int disconnected = 0;
+    server.onDisconnected = [&] { ++disconnected; };
+
+    base::LocalSocket client(g_loop);
+    ASSERT_TRUE(client.connectToPath(path));
+    const uint32_t length = dm::kMaxFrameSize + 1;
+    client.write(std::string(reinterpret_cast<const char *>(&length), sizeof(length)));
+    EXPECT_TRUE(runUntil([&] { return disconnected == 1; }));
+}
+
+class HelperTest : public ::testing::Test
+{
+protected:
+    void SetUp() override { dm::HelperProcess::setProgram(selfPath()); }
+    void TearDown() override { unsetenv(kFakeHelper); }
+};
+
+TEST_F(HelperTest, HelperProtocolRunsALogin)
+{
+    setenv(kFakeHelper, "1", 1);
+    dm::HelperProcess helper;
+    std::vector<std::string> questions;
+    int authenticated = 0;
+    int started = 0;
+    int finished = 0;
+    helper.onQuestion = [&](const std::string &style, const std::string &) { questions.push_back(style); };
+    helper.onAuthenticated = [&] { ++authenticated; };
+    helper.onStarted = [&](const std::string &) { ++started; };
+    helper.onFinished = [&] { ++finished; };
+
+    helper.login("cutefish-dm", "alice", true, 2);
+    ASSERT_TRUE(runUntil([&] { return questions.size() == 1; }));
+    EXPECT_EQ(questions.front(), "secret");
+    helper.answer(Json("right"));
+    ASSERT_TRUE(runUntil([&] { return authenticated == 1; }));
+    EXPECT_TRUE(helper.isAuthenticated());
+    helper.start({"/bin/true"}, {"XDG_VTNR=2"});
+    ASSERT_TRUE(runUntil([&] { return started == 1; }));
+    EXPECT_EQ(helper.sessionId(), "42");
+    EXPECT_TRUE(helper.hasStarted());
+    helper.terminate();
+    EXPECT_TRUE(runUntil([&] { return finished == 1; }));
+}
+
+TEST_F(HelperTest, AHelperIgnoringTerminationIsKilledAtTheDeadline)
+{
+    setenv(kFakeHelper, "stubborn", 1);
+    dm::HelperProcess helper;
+    helper.setStopTimeout(300ms);
+    int questions = 0;
+    int authenticated = 0;
+    int started = 0;
+    int finished = 0;
+    helper.onQuestion = [&](const std::string &, const std::string &) { ++questions; };
+    helper.onAuthenticated = [&] { ++authenticated; };
+    helper.onStarted = [&](const std::string &) { ++started; };
+    helper.onFinished = [&] { ++finished; };
+
+    helper.login("cutefish-dm", "alice", true, 2);
+    ASSERT_TRUE(runUntil([&] { return questions == 1; }));
+    helper.answer(Json("right"));
+    ASSERT_TRUE(runUntil([&] { return authenticated == 1; }));
+    helper.start({"/bin/true"}, {"XDG_VTNR=2"});
+    ASSERT_TRUE(runUntil([&] { return started == 1; }));
+    helper.terminate();
+    runFor(150ms);
+    EXPECT_EQ(finished, 0);
+    EXPECT_TRUE(runUntil([&] { return finished == 1; }, 2s));
+}
+
+TEST_F(HelperTest, HelperReportsAWrongPassword)
+{
+    setenv(kFakeHelper, "1", 1);
+    dm::HelperProcess helper;
+    std::vector<bool> failed;
+    int finished = 0;
+    int questions = 0;
+    helper.onFailed = [&](bool authentication, const std::string &) { failed.push_back(authentication); };
+    helper.onFinished = [&] { ++finished; };
+    helper.onQuestion = [&](const std::string &, const std::string &) { ++questions; };
+
+    helper.login("cutefish-dm", "alice", true, 2);
+    ASSERT_TRUE(runUntil([&] { return questions == 1; }));
+    helper.answer(Json("wrong"));
+    ASSERT_TRUE(runUntil([&] { return finished == 1; }));
+    ASSERT_EQ(failed.size(), 1u);
+    EXPECT_TRUE(failed.front());
+    EXPECT_FALSE(helper.isAuthenticated());
+}
+
+TEST_F(HelperTest, AHelperThatCannotStartFailsAndFinishes)
+{
+    dm::HelperProcess::setProgram("/nonexistent/cutefish-dm-helper");
+    dm::HelperProcess helper;
+    std::vector<std::string> failures;
+    int finished = 0;
+    helper.onFailed = [&](bool, const std::string &message) { failures.push_back(message); };
+    helper.onFinished = [&] { ++finished; };
+    helper.login("cutefish-dm", "alice", true, 2);
+    EXPECT_TRUE(failures.empty());
+    ASSERT_TRUE(runUntil([&] { return finished == 1; }));
+    EXPECT_EQ(failures, std::vector<std::string> {"The login helper did not start"});
+}
+
+int main(int argc, char **argv)
+{
+    if (const char *mode = getenv(kFakeHelper))
+        return fakeHelper(mode);
+
+    base::EventLoop loop;
+    g_loop = &loop;
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

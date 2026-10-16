@@ -1,4 +1,4 @@
-find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
+find_package(GTest REQUIRED)
 
 add_executable(dm-test
     dm_test.cpp
@@ -13,5 +13,5 @@ target_compile_definitions(dm-test PRIVATE
     DM_SESSION_WRAPPER="/nonexistent/cutefish-dm-session"
 )
 target_include_directories(dm-test PRIVATE ${PROJECT_SOURCE_DIR})
-target_link_libraries(dm-test PRIVATE cutefish-dm-common Qt6::Core Qt6::Network Qt6::Test)
+target_link_libraries(dm-test PRIVATE cutefish-dm-common GTest::gtest)
 add_test(NAME dm COMMAND dm-test)
