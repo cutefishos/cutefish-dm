@@ -588,6 +588,16 @@ TEST_F(DaemonTest, ANewLoginDropsTheStartWaitingForThePreviousSession)
     EXPECT_EQ(response()["type"].toString(), "success");
 }
 
+TEST_F(DaemonTest, ASessionThatFailsToOpenAnswersNoLaterRequest)
+{
+    logIn("alice");
+    startSession(Json::Array {Json("/bin/sh"), Json("--fail-open")});
+
+    // In flight while the session fails; its answer is the password prompt a second later.
+    request(Json::object({{"type", "create_session"}, {"username", "slow"}}));
+    EXPECT_EQ(response()["type"].toString(), "auth_message");
+}
+
 int main(int argc, char **argv)
 {
     if (const char *mode = getenv(kFakeHelper))

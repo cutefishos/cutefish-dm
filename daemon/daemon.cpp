@@ -354,6 +354,12 @@ void Daemon::launchSession(PendingStart start)
 
     m_session = std::move(m_login);
     HelperProcess *session = m_session.get();
+    // The greeter's start request is answered; what the session reports now answers none.
+    session->onQuestion = nullptr;
+    session->onAuthenticated = nullptr;
+    session->onFailed = [](bool, const std::string &message) {
+        CF_WARNING(base::LogCategory::defaultCategory()) << "Session:" << message;
+    };
     session->onStarted = [this, session](const std::string &id) {
         whenControlled(session, m_config.sessionVt, [this, session, id](bool controlled) {
             if (m_session.get() != session)
