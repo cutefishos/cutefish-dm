@@ -570,6 +570,24 @@ TEST_F(DaemonTest, AnAnswerAfterAuthenticationIsRefusedNotLeftUnanswered)
     startSession(Json::Array {Json("/bin/sh")});
 }
 
+TEST_F(DaemonTest, ANewLoginDropsTheStartWaitingForThePreviousSession)
+{
+    logIn("alice");
+    startSession(Json::Array {Json("/bin/sh")});
+
+    // The first session takes half a second to end after the second login asks it to.
+    logIn("alice");
+    startSession(Json::Array {Json("/bin/sh")});
+
+    // A third login replaces the second before the first session is gone.
+    request(Json::object({{"type", "create_session"}, {"username", "alice"}}));
+    ASSERT_EQ(response()["type"].toString(), "auth_message");
+    runFor(1500ms);
+
+    request(Json::object({{"type", "post_auth_message_response"}, {"response", "right"}}));
+    EXPECT_EQ(response()["type"].toString(), "success");
+}
+
 int main(int argc, char **argv)
 {
     if (const char *mode = getenv(kFakeHelper))

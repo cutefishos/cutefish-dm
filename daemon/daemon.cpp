@@ -257,6 +257,8 @@ void Daemon::switchToGreeter(base::dbus::MethodCall &call)
 void Daemon::createSession(const std::string &username)
 {
     release(m_login);
+    // A start still waiting for the previous session went with the login it was for.
+    m_pendingStart.reset();
 
     m_login = std::make_unique<HelperProcess>();
     auto *login = m_login.get();
@@ -338,6 +340,7 @@ void Daemon::startSession(const std::vector<std::string> &command, const std::ve
 void Daemon::cancelSession()
 {
     release(m_login);
+    m_pendingStart.reset();
     m_server.respond(GreeterServer::success());
 }
 
