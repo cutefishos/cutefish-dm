@@ -347,6 +347,31 @@ TEST_F(DisplayManagerTest, GreeterServerDropsAMalformedClient)
     EXPECT_TRUE(runUntil([&] { return disconnected == 1; }));
 }
 
+TEST_F(DisplayManagerTest, AReplacedGreeterClientCountsAsDisconnected)
+{
+    const std::string path = directory.path() + "/greeter.sock";
+    dm::GreeterServer server;
+    ASSERT_TRUE(server.listen(path, getuid()));
+    int disconnected = 0;
+    std::vector<std::string> created;
+    server.onDisconnected = [&] { ++disconnected; };
+    server.onCreateSession = [&](const std::string &username) { created.push_back(username); };
+
+    base::LocalSocket first(g_loop);
+    ASSERT_TRUE(first.connectToPath(path));
+    first.write(dm::encodeFrame(Json::object({{"type", "create_session"}, {"username", "alice"}})));
+    ASSERT_TRUE(runUntil([&] { return created.size() == 1; }));
+
+    base::LocalSocket second(g_loop);
+    ASSERT_TRUE(second.connectToPath(path));
+    EXPECT_TRUE(runUntil([&] { return disconnected == 1; }));
+
+    // The newcomer's request is served although the first one's was never answered.
+    second.write(dm::encodeFrame(Json::object({{"type", "create_session"}, {"username", "bob"}})));
+    ASSERT_TRUE(runUntil([&] { return created.size() == 2; }));
+    EXPECT_EQ(created.back(), "bob");
+}
+
 class HelperTest : public ::testing::Test
 {
 protected:

@@ -44,9 +44,14 @@ void GreeterServer::accept(int fd)
         return;
     }
 
-    // A new login screen replaces whatever was connected before.
-    if (m_client)
+    // A new login screen replaces whatever was connected before, and the login
+    // that one was creating goes with it.
+    if (m_client) {
         m_client->abort();
+        m_client.reset();
+        if (auto callback = onDisconnected)
+            callback();
+    }
 
     m_client = std::make_unique<base::LocalSocket>();
     m_client->adopt(fd);
