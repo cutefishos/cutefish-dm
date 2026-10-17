@@ -6,6 +6,7 @@
 #include <cstring>
 #include <functional>
 #include <poll.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -16,6 +17,7 @@
 
 #include "common/wire.h"
 #include "daemon/config.h"
+#include "daemon/daemon.h"
 #include "daemon/greeterserver.h"
 #include "daemon/helperprocess.h"
 #include "daemon/sessions.h"
@@ -26,10 +28,15 @@ using namespace std::chrono_literals;
 using dm::Json;
 
 // When set, the test binary is the helper: it accepts "right" and its session
-// runs until terminated, or, set to "stubborn", ignores SIGTERM.
+// runs until terminated, or, set to "stubborn", ignores SIGTERM, or, set to
+// "linger", ends half a second after it. User "slow" is asked for a password
+// only after a second; a session command holding "--fail-open" fails to open
+// after 300 ms, as when pam_open_session does.
 static constexpr char kFakeHelper[] = "DM_TEST_FAKE_HELPER";
 
 static base::EventLoop *g_loop = nullptr;
+
+static volatile sig_atomic_t g_terminated = 0;
 
 static std::string readLine()
 {
@@ -50,14 +57,22 @@ static void writeLine(const Json &message)
 static int fakeHelper(const char *mode)
 {
     const auto login = dm::decodeLine(readLine());
-    if (!login || (*login)["user"].toString() != "alice")
+    if (!login)
         return 2;
 
-    writeLine(Json::object({{"type", "question"}, {"style", "secret"}, {"text", "Password:"}}));
-    const auto answer = dm::decodeLine(readLine());
-    if (!answer || (*answer)["response"].toString() != "right") {
-        writeLine(Json::object({{"type", "error"}, {"auth", true}, {"message", "Authentication failure"}}));
-        return 1;
+    if ((*login)["authenticate"].toBool()) {
+        const std::string user = (*login)["user"].toString();
+        if (user != "alice" && user != "slow")
+            return 2;
+        if (user == "slow")
+            usleep(1000 * 1000);
+
+        writeLine(Json::object({{"type", "question"}, {"style", "secret"}, {"text", "Password:"}}));
+        const auto answer = dm::decodeLine(readLine());
+        if (!answer || (*answer)["response"].toString() != "right") {
+            writeLine(Json::object({{"type", "error"}, {"auth", true}, {"message", "Authentication failure"}}));
+            return 1;
+        }
     }
 
     writeLine(Json::object({{"type", "authenticated"}}));
@@ -66,13 +81,25 @@ static int fakeHelper(const char *mode)
     if (!start || !(*start)["cmd"].isArray() || (*start)["cmd"].toArray().empty())
         return 0;
 
+    for (const Json &argument : (*start)["cmd"].toArray()) {
+        if (argument.toString() == "--fail-open") {
+            usleep(300 * 1000);
+            writeLine(Json::object({{"type", "error"}, {"auth", false}, {"message", "Cannot open session"}}));
+            return 1;
+        }
+    }
+
     if (std::strcmp(mode, "stubborn") == 0)
         signal(SIGTERM, SIG_IGN);
+    if (std::strcmp(mode, "linger") == 0)
+        signal(SIGTERM, [](int) { g_terminated = 1; });
 
     writeLine(Json::object({{"type", "started"}, {"pid", int64_t(getpid())}, {"session", "42"}}));
 
-    for (;;)
+    while (!g_terminated)
         pause();
+    usleep(500 * 1000);
+    return 0;
 }
 
 // Runs the loop until done() holds or the timeout passes; returns done().
@@ -464,6 +491,83 @@ TEST_F(HelperTest, AHelperThatCannotStartFailsAndFinishes)
     EXPECT_TRUE(failures.empty());
     ASSERT_TRUE(runUntil([&] { return finished == 1; }));
     EXPECT_EQ(failures, std::vector<std::string> {"The login helper did not start"});
+}
+
+// The daemon with fake helpers, the test as its login screen.
+class DaemonTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        dm::HelperProcess::setProgram(selfPath());
+        setenv(kFakeHelper, "linger", 1);
+        // The daemon's own D-Bus service is not under test.
+        setenv("DBUS_SYSTEM_BUS_ADDRESS", "unix:path=/nonexistent/system_bus_socket", 1);
+
+        dm::Config config;
+        config.greeterUser = getpwuid(getuid())->pw_name;
+        config.greeterCommand = {"/bin/true"};
+        config.sessionDirectories = {directory.path()};
+        config.statePath = directory.path() + "/state.conf";
+        config.runtimeDirectory = directory.path() + "/run";
+        daemon = std::make_unique<dm::Daemon>(config);
+        ASSERT_TRUE(daemon->start());
+        ASSERT_TRUE(greeter.connectToPath(config.runtimeDirectory + "/greeter.sock"));
+    }
+
+    void TearDown() override
+    {
+        daemon.reset();
+        unsetenv(kFakeHelper);
+        unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+    }
+
+    void request(const Json &message) { greeter.write(dm::encodeFrame(message)); }
+
+    // The next response, or null when none comes in time.
+    Json response(std::chrono::milliseconds timeout = 5s)
+    {
+        std::optional<Json> next;
+        runUntil(
+                [&] {
+                    reader.append(greeter.readAll());
+                    next = reader.next();
+                    return next.has_value();
+                },
+                timeout);
+        return next.value_or(Json());
+    }
+
+    // create_session and the password, up to the success response.
+    void logIn(const std::string &user)
+    {
+        request(Json::object({{"type", "create_session"}, {"username", user}}));
+        ASSERT_EQ(response()["type"].toString(), "auth_message");
+        request(Json::object({{"type", "post_auth_message_response"}, {"response", "right"}}));
+        ASSERT_EQ(response()["type"].toString(), "success");
+    }
+
+    void startSession(const Json::Array &command)
+    {
+        request(Json::object({{"type", "start_session"}, {"cmd", command}, {"env", Json::Array {}}}));
+        ASSERT_EQ(response()["type"].toString(), "success");
+    }
+
+    base::file::TemporaryDirectory directory {"/tmp", "dm-test"};
+    std::unique_ptr<dm::Daemon> daemon;
+    base::LocalSocket greeter {g_loop};
+    dm::FrameReader reader;
+};
+
+TEST_F(DaemonTest, AnAnswerAfterAuthenticationIsRefusedNotLeftUnanswered)
+{
+    logIn("alice");
+    request(Json::object({{"type", "post_auth_message_response"}, {"response", "right"}}));
+    const Json answer = response(2s);
+    EXPECT_EQ(answer["type"].toString(), "error");
+
+    // The login survives the stray answer.
+    startSession(Json::Array {Json("/bin/sh")});
 }
 
 int main(int argc, char **argv)

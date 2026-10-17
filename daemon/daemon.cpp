@@ -283,6 +283,8 @@ void Daemon::postAuthMessageResponse(const Json &response)
 {
     if (!m_login)
         m_server.respond(GreeterServer::error(false, "No session is being created"));
+    else if (m_login->isAuthenticated())
+        m_server.respond(GreeterServer::error(false, "No authentication message is pending"));
     else
         m_login->answer(response);
 }
