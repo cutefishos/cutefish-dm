@@ -402,6 +402,18 @@ int main()
         arguments.push_back(const_cast<char *>(argument.c_str()));
     arguments.push_back(nullptr);
 
+    // Out of the OOM killer's way, inherited by the session and everything it
+    // starts; this process's end ends the session too. The session puts its
+    // applications back to 0. Not -1000: a runaway session process must remain
+    // the kernel's last resort. Written as root, it is also the floor no
+    // descendant can go below.
+    const int protection = open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);
+    if (protection >= 0) {
+        if (write(protection, "-900", 4) != 4)
+            perror("oom_score_adj");
+        close(protection);
+    }
+
     // The session runs in a child; this process stays to close the PAM session.
     const pid_t child = fork();
     if (child == 0) {

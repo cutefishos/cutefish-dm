@@ -11,6 +11,8 @@ OnFailure=plymouth-quit.service
 ExecStart=/usr/bin/cutefish-dm
 # The daemon ends the login screen and the session itself.
 KillMode=mixed
+# Its end takes the login screen and every session with it.
+OOMScoreAdjust=-900
 Restart=always
 RestartSec=1s
 EnvironmentFile=-/etc/default/locale
