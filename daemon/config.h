@@ -16,6 +16,7 @@ struct Config {
     std::vector<std::string> sessionDirectories = {"/usr/local/share/wayland-sessions", "/usr/share/wayland-sessions"};
     std::string defaultSession = "cutefish-wayland";
     std::string statePath = "/var/lib/cutefish-dm/state.conf";
+    std::string backgroundDirectory = "/var/lib/cutefish-dm/backgrounds";
     std::string runtimeDirectory = "/run/cutefish-dm";
 
     // Defaults, overridden by whatever `path` sets.

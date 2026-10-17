@@ -4,7 +4,10 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <filesystem>
 #include <functional>
+#include <optional>
 #include <poll.h>
 #include <pwd.h>
 #include <sys/stat.h>
@@ -16,6 +19,7 @@
 #include "base/settings.h"
 
 #include "common/wire.h"
+#include "daemon/backgrounds.h"
 #include "daemon/config.h"
 #include "daemon/daemon.h"
 #include "daemon/greeterserver.h"
@@ -299,6 +303,119 @@ TEST_F(DisplayManagerTest, ConfigFallsBackToDefaults)
     EXPECT_EQ(config.sessionDirectories, (std::vector<std::string> {"/a", "/b"}));
     EXPECT_EQ(config.runtimeDirectory, "/run/test");
     EXPECT_EQ(config.greeterUser, "cutefish-greeter");
+}
+
+static std::string currentUser()
+{
+    const passwd *entry = getpwuid(getuid());
+    return entry && entry->pw_name ? entry->pw_name : "";
+}
+
+static base::dbus::UnixFd openForReading(const std::string &path)
+{
+    return base::dbus::UnixFd::adopt(open(path.c_str(), O_RDONLY | O_CLOEXEC));
+}
+
+// Runs the loop until the copy answers; its answer.
+static std::optional<bool> copyPicture(dm::Backgrounds &backgrounds, const std::string &user,
+                                       base::dbus::UnixFd file)
+{
+    std::optional<bool> answer;
+    backgrounds.setPicture(user, std::move(file), [&answer](bool copied) { answer = copied; });
+    runUntil([&answer] { return answer.has_value(); });
+    return answer;
+}
+
+TEST_F(DisplayManagerTest, BackgroundsKeepTheUsersPictureAndColour)
+{
+    const std::string user = currentUser();
+    ASSERT_FALSE(user.empty());
+    dm::Backgrounds backgrounds(directory.path() + "/backgrounds");
+
+    writeFile(directory.path() + "/sky.jpg", "picture bytes");
+    base::dbus::UnixFd file = openForReading(directory.path() + "/sky.jpg");
+    // The caller's offset is not where the copy starts.
+    ASSERT_EQ(lseek(file.fd(), 4, SEEK_SET), 4);
+    EXPECT_EQ(copyPicture(backgrounds, user, file), true);
+    EXPECT_EQ(lseek(file.fd(), 0, SEEK_CUR), 4);
+    EXPECT_EQ(base::file::read(backgrounds.picturePath(user)).value_or(""), "picture bytes");
+    // The keys the login screen reads, as services.conf has them.
+    {
+        const base::Settings settings(backgrounds.settingsPath(user));
+        EXPECT_EQ(settings.intValue("Appearance/BackgroundType", -1), 0);
+        EXPECT_EQ(settings.stringValue("Appearance/Wallpaper"), backgrounds.picturePath(user));
+    }
+    // The login screen reads both as its own user.
+    struct stat info = {};
+    ASSERT_EQ(stat(backgrounds.picturePath(user).c_str(), &info), 0);
+    EXPECT_TRUE(info.st_mode & S_IROTH);
+    ASSERT_EQ(stat(backgrounds.settingsPath(user).c_str(), &info), 0);
+    EXPECT_TRUE(info.st_mode & S_IROTH);
+
+    EXPECT_TRUE(backgrounds.setColor(user, "#2B8ADA"));
+    {
+        const base::Settings settings(backgrounds.settingsPath(user));
+        EXPECT_EQ(settings.intValue("Appearance/BackgroundType", -1), 1);
+        EXPECT_EQ(settings.stringValue("Appearance/BackgroundColor"), "#2B8ADA");
+    }
+    EXPECT_FALSE(backgrounds.setColor(user, "red"));
+    EXPECT_FALSE(backgrounds.setColor(user, "#12345"));
+    EXPECT_FALSE(backgrounds.setColor(user, "#12x456"));
+}
+
+TEST_F(DisplayManagerTest, BackgroundsRefuseWhatIsNotARegularFile)
+{
+    const std::string user = currentUser();
+    dm::Backgrounds backgrounds(directory.path() + "/backgrounds");
+
+    EXPECT_EQ(copyPicture(backgrounds, user, openForReading(directory.path())), false);
+    int pipeFds[2];
+    ASSERT_EQ(pipe(pipeFds), 0);
+    close(pipeFds[1]);
+    EXPECT_EQ(copyPicture(backgrounds, user, base::dbus::UnixFd::adopt(pipeFds[0])), false);
+    writeFile(directory.path() + "/empty.jpg", "");
+    EXPECT_EQ(copyPicture(backgrounds, user, openForReading(directory.path() + "/empty.jpg")), false);
+    EXPECT_NE(access(backgrounds.settingsPath(user).c_str(), F_OK), 0);
+    EXPECT_NE(access(backgrounds.picturePath(user).c_str(), F_OK), 0);
+}
+
+TEST_F(DisplayManagerTest, BackgroundsKeepTheLatestRequest)
+{
+    const std::string user = currentUser();
+    dm::Backgrounds backgrounds(directory.path() + "/backgrounds");
+
+    // A colour chosen while a picture is still being copied wins.
+    writeFile(directory.path() + "/sky.jpg", "picture bytes");
+    std::optional<bool> answer;
+    backgrounds.setPicture(user, openForReading(directory.path() + "/sky.jpg"),
+                           [&answer](bool copied) { answer = copied; });
+    EXPECT_TRUE(backgrounds.setColor(user, "#000"));
+    runUntil([&answer] { return answer.has_value(); });
+    EXPECT_EQ(answer, true);
+    const base::Settings settings(backgrounds.settingsPath(user));
+    EXPECT_EQ(settings.intValue("Appearance/BackgroundType", -1), 1);
+    EXPECT_NE(access(backgrounds.picturePath(user).c_str(), F_OK), 0);
+    // No copy is left behind.
+    std::error_code error;
+    for (const auto &entry : std::filesystem::directory_iterator(directory.path() + "/backgrounds", error))
+        EXPECT_EQ(entry.path().filename().string(), user + ".conf");
+}
+
+TEST_F(DisplayManagerTest, BackgroundsOfRemovedUsersAreDropped)
+{
+    const std::string user = currentUser();
+    const std::string path = directory.path() + "/backgrounds";
+    dm::Backgrounds backgrounds(path);
+    EXPECT_TRUE(backgrounds.setColor(user, "#000"));
+    writeFile(path + "/no-such-user-dm-test.conf", "");
+    writeFile(path + "/no-such-user-dm-test.picture", "");
+    writeFile(path + "/" + user + ".picture.7", "");
+
+    backgrounds.removeStale();
+    EXPECT_EQ(access(backgrounds.settingsPath(user).c_str(), F_OK), 0);
+    EXPECT_NE(access((path + "/no-such-user-dm-test.conf").c_str(), F_OK), 0);
+    EXPECT_NE(access((path + "/no-such-user-dm-test.picture").c_str(), F_OK), 0);
+    EXPECT_NE(access((path + "/" + user + ".picture.7").c_str(), F_OK), 0);
 }
 
 TEST(ConfigTest, CommandsSplitAsTheConfigurationAlwaysHas)

@@ -9,6 +9,7 @@
 #include "base/dbus.h"
 #include "base/timer.h"
 
+#include "backgrounds.h"
 #include "config.h"
 #include "greeterserver.h"
 #include "helperprocess.h"
@@ -31,6 +32,10 @@ public:
     // com.cutefish.DisplayManager.SwitchToGreeter: called by the session
     // before it ends; replies once the login screen is up.
     void switchToGreeter(cutefish::base::dbus::MethodCall &call);
+    // com.cutefish.DisplayManager.SetBackgroundPicture and SetBackgroundColor:
+    // the caller's own desktop background, for the login screen to show.
+    void setBackgroundPicture(cutefish::base::dbus::MethodCall &call);
+    void setBackgroundColor(cutefish::base::dbus::MethodCall &call);
 
 private:
     struct PendingStart {
@@ -44,6 +49,8 @@ private:
     void returnToGreeter();
     void onGreeterFinished();
     void replySwitchRequests(bool switched);
+    // The calling user's name; empty, with the call refused, when it cannot be told.
+    std::string callerName(cutefish::base::dbus::MethodCall &call);
 
     void createSession(const std::string &username);
     void postAuthMessageResponse(const Json &response);
@@ -61,6 +68,7 @@ private:
 
     Config m_config;
     State m_state;
+    Backgrounds m_backgrounds;
     GreeterServer m_server;
     cutefish::base::dbus::Connection *m_bus = nullptr;
     std::unique_ptr<cutefish::base::dbus::Object> m_object;

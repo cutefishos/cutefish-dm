@@ -58,6 +58,7 @@ static bool bootSplashRunning()
 Daemon::Daemon(Config config)
     : m_config(std::move(config))
     , m_state(m_config.statePath)
+    , m_backgrounds(m_config.backgroundDirectory)
 {
     m_greeterRestart.setSingleShot(true);
     m_greeterRestart.onTimeout = [this] { startGreeter(); };
@@ -110,6 +111,10 @@ bool Daemon::start()
                                                         "com.cutefish.DisplayManager");
         m_object->addMethod("SwitchToGreeter", "", "",
                             [this](base::dbus::MethodCall &call) { switchToGreeter(call); });
+        m_object->addMethod("SetBackgroundPicture", "h", "",
+                            [this](base::dbus::MethodCall &call) { setBackgroundPicture(call); });
+        m_object->addMethod("SetBackgroundColor", "s", "",
+                            [this](base::dbus::MethodCall &call) { setBackgroundColor(call); });
     }
     if (!m_bus || !m_object->publish() || !m_bus->requestName("com.cutefish.DisplayManager"))
         CF_WARNING(base::LogCategory::defaultCategory())
@@ -119,6 +124,8 @@ bool Daemon::start()
         m_bootSplash = true;
         execute("plymouth", {"deactivate"});
     }
+
+    m_backgrounds.removeStale();
 
     // A run that ended mid-login may have left it in KD_GRAPHICS with nobody on it.
     restoreTextMode(m_config.sessionVt);
@@ -252,6 +259,58 @@ void Daemon::switchToGreeter(base::dbus::MethodCall &call)
 
     m_switchRequests.push_back(call);
     returnToGreeter();
+}
+
+std::string Daemon::callerName(base::dbus::MethodCall &call)
+{
+    const base::dbus::Proxy driver(m_bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus");
+    const std::optional<uint32_t> caller =
+            driver.call("GetConnectionUnixUser", call.message().sender()).value<uint32_t>();
+    const passwd *entry = caller ? getpwuid(*caller) : nullptr;
+    if (!entry || !entry->pw_name || m_config.greeterUser == entry->pw_name) {
+        call.replyError("org.freedesktop.DBus.Error.AccessDenied", "The caller is not a user who logs in");
+        return {};
+    }
+
+    return entry->pw_name;
+}
+
+void Daemon::setBackgroundPicture(base::dbus::MethodCall &call)
+{
+    base::dbus::UnixFd file;
+    if (!call.read(file) || !file.isValid()) {
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Expected the picture's file descriptor");
+        return;
+    }
+
+    const std::string user = callerName(call);
+    if (user.empty())
+        return;
+
+    m_backgrounds.setPicture(user, file, [call](bool copied) mutable {
+        if (copied)
+            call.reply();
+        else
+            call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "The picture cannot be copied");
+    });
+}
+
+void Daemon::setBackgroundColor(base::dbus::MethodCall &call)
+{
+    std::string color;
+    if (!call.read(color)) {
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Expected a colour");
+        return;
+    }
+
+    const std::string user = callerName(call);
+    if (user.empty())
+        return;
+
+    if (m_backgrounds.setColor(user, color))
+        call.reply();
+    else
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Not a colour that can be stored");
 }
 
 void Daemon::createSession(const std::string &username)

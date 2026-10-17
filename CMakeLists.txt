@@ -26,6 +26,7 @@ add_library(cutefish-dm-common STATIC common/wire.cpp)
 target_link_libraries(cutefish-dm-common PUBLIC Cutefish::ToolkitBase)
 
 add_executable(cutefish-dm
+    daemon/backgrounds.cpp
     daemon/config.cpp
     daemon/daemon.cpp
     daemon/greeterserver.cpp
