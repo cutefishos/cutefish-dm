@@ -54,7 +54,7 @@ install(FILES data/cutefish-dm.pam DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/
         RENAME cutefish-dm)
 install(FILES data/cutefish-dm-greeter.pam DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/pam.d
         RENAME cutefish-dm-greeter)
-install(FILES data/com.cutefish.DisplayManager.conf
+install(FILES data/org.cutefish.DisplayManager.conf
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/dbus-1/system.d)
 foreach(unit pipewire.socket pipewire.service pipewire-pulse.socket pipewire-pulse.service
         wireplumber.service filter-chain.service)

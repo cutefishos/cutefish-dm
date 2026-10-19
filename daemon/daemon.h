@@ -29,10 +29,10 @@ public:
 
     bool start();
 
-    // com.cutefish.DisplayManager.SwitchToGreeter: called by the session
+    // org.cutefish.DisplayManager.SwitchToGreeter: called by the session
     // before it ends; replies once the login screen is up.
     void switchToGreeter(cutefish::base::dbus::MethodCall &call);
-    // com.cutefish.DisplayManager.SetBackgroundPicture and SetBackgroundColor:
+    // org.cutefish.DisplayManager.SetBackgroundPicture and SetBackgroundColor:
     // the caller's own desktop background, for the login screen to show.
     void setBackgroundPicture(cutefish::base::dbus::MethodCall &call);
     void setBackgroundColor(cutefish::base::dbus::MethodCall &call);

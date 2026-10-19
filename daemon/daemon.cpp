@@ -107,8 +107,8 @@ bool Daemon::start()
 
     m_bus = base::dbus::Connection::system();
     if (m_bus) {
-        m_object = std::make_unique<base::dbus::Object>(m_bus, "/com/cutefish/DisplayManager",
-                                                        "com.cutefish.DisplayManager");
+        m_object = std::make_unique<base::dbus::Object>(m_bus, "/org/cutefish/DisplayManager",
+                                                        "org.cutefish.DisplayManager");
         m_object->addMethod("SwitchToGreeter", "", "",
                             [this](base::dbus::MethodCall &call) { switchToGreeter(call); });
         m_object->addMethod("SetBackgroundPicture", "h", "",
@@ -116,9 +116,9 @@ bool Daemon::start()
         m_object->addMethod("SetBackgroundColor", "s", "",
                             [this](base::dbus::MethodCall &call) { setBackgroundColor(call); });
     }
-    if (!m_bus || !m_object->publish() || !m_bus->requestName("com.cutefish.DisplayManager"))
+    if (!m_bus || !m_object->publish() || !m_bus->requestName("org.cutefish.DisplayManager"))
         CF_WARNING(base::LogCategory::defaultCategory())
-                << "Cannot register com.cutefish.DisplayManager; sessions will end on screen";
+                << "Cannot register org.cutefish.DisplayManager; sessions will end on screen";
 
     if (bootSplashRunning()) {
         m_bootSplash = true;
