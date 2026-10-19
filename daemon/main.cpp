@@ -1,3 +1,4 @@
+#include <clocale>
 #include <csignal>
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
@@ -5,6 +6,7 @@
 
 #include "base/command_line.h"
 #include "base/event_loop.h"
+#include "base/i18n.h"
 #include "base/logging.h"
 
 #include "config.h"
@@ -14,6 +16,9 @@ using namespace cutefish;
 
 int main(int argc, char *argv[])
 {
+    std::setlocale(LC_ALL, "");
+    i18n::setDomain("cutefish-dm");
+
     // Through signalfd, so SIGTERM runs the daemon's teardown.
     sigset_t mask;
     sigemptyset(&mask);

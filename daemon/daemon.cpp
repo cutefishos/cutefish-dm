@@ -5,6 +5,7 @@
 #include <pwd.h>
 
 #include "base/event_loop.h"
+#include "base/i18n.h"
 #include "base/logging.h"
 #include "base/paths.h"
 #include "base/process.h"
@@ -13,6 +14,7 @@
 #include "terminal.h"
 
 using namespace cutefish;
+using cutefish::i18n::tr;
 
 namespace dm {
 
@@ -343,9 +345,9 @@ void Daemon::createSession(const std::string &username)
 void Daemon::postAuthMessageResponse(const Json &response)
 {
     if (!m_login)
-        m_server.respond(GreeterServer::error(false, "No session is being created"));
+        m_server.respond(GreeterServer::error(false, tr("No session is being created")));
     else if (m_login->isAuthenticated())
-        m_server.respond(GreeterServer::error(false, "No authentication message is pending"));
+        m_server.respond(GreeterServer::error(false, tr("No authentication message is pending")));
     else
         m_login->answer(response);
 }
@@ -354,7 +356,7 @@ void Daemon::startSession(const std::vector<std::string> &command, const std::ve
                           const std::string &session)
 {
     if (!m_login || !m_login->isAuthenticated()) {
-        m_server.respond(GreeterServer::error(false, "Not authenticated"));
+        m_server.respond(GreeterServer::error(false, tr("Not authenticated")));
         return;
     }
 
@@ -365,7 +367,7 @@ void Daemon::startSession(const std::vector<std::string> &command, const std::ve
     if (!session.empty()) {
         const auto entry = findSession(m_config.sessionDirectories, session);
         if (!entry) {
-            m_server.respond(GreeterServer::error(false, "No such session"));
+            m_server.respond(GreeterServer::error(false, tr("No such session")));
             return;
         }
 
@@ -380,7 +382,7 @@ void Daemon::startSession(const std::vector<std::string> &command, const std::ve
         const auto variables = sessionEnvironment(SessionEntry {}, m_config.sessionVt);
         start.environment.insert(start.environment.end(), variables.begin(), variables.end());
     } else {
-        m_server.respond(GreeterServer::error(false, "Nothing to start"));
+        m_server.respond(GreeterServer::error(false, tr("Nothing to start")));
         return;
     }
 

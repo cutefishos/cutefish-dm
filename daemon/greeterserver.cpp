@@ -1,12 +1,14 @@
 #include "greeterserver.h"
 
 #include "base/event_loop.h"
+#include "base/i18n.h"
 
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 using namespace cutefish;
+using cutefish::i18n::tr;
 
 namespace dm {
 
@@ -124,7 +126,7 @@ void GreeterServer::dispatch(const Json &request)
         if (auto callback = onCancelSession)
             callback();
     } else {
-        respond(error(false, "Unknown request"));
+        respond(error(false, tr("Unknown request")));
     }
 }
 

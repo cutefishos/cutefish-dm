@@ -1,9 +1,11 @@
 #include "helperprocess.h"
 
 #include "base/event_loop.h"
+#include "base/i18n.h"
 #include "base/logging.h"
 
 using namespace cutefish;
+using cutefish::i18n::tr;
 
 namespace dm {
 
@@ -34,7 +36,7 @@ HelperProcess::HelperProcess()
     m_process.onFinished = [this](int, bool) {
         m_stopDeadline.stop();
         if (!m_authenticated && !m_failed)
-            failed(false, "The login helper exited");
+            failed(false, tr("The login helper exited"));
         finished();
     };
 }
@@ -79,7 +81,7 @@ void HelperProcess::login(const std::string &service, const std::string &user, b
             if (alive.expired())
                 return;
             m_failed = true;
-            failed(false, "The login helper did not start");
+            failed(false, tr("The login helper did not start"));
             finished();
         });
         return;

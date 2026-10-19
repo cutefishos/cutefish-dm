@@ -4,6 +4,7 @@
 #include <security/pam_appl.h>
 
 #include <cerrno>
+#include <clocale>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -19,10 +20,12 @@
 #include <unistd.h>
 #include <vector>
 
+#include "base/i18n.h"
 #include "base/strings.h"
 
 #include "../common/wire.h"
 
+using cutefish::i18n::tr;
 using dm::Json;
 
 static constexpr size_t kMaxLine = 64 * 1024;
@@ -277,6 +280,9 @@ static std::vector<std::string> strings(const Json &array)
 
 int main()
 {
+    std::setlocale(LC_ALL, "");
+    cutefish::i18n::setDomain("cutefish-dm");
+
     // The daemon's signalfd mask is inherited; without this SIGTERM never lands.
     sigset_t none;
     sigemptyset(&none);
@@ -296,7 +302,7 @@ int main()
 
     const auto login = receive();
     if (!login || (*login)["type"].toString() != "login") {
-        fail(false, "Expected a login request");
+        fail(false, tr("Expected a login request"));
         return 1;
     }
 
@@ -305,7 +311,7 @@ int main()
     const bool authenticate = (*login)["authenticate"].toBool();
     const int vt = int((*login)["vt"].toInt());
     if (service.empty() || user.empty() || vt <= 0) {
-        fail(false, "Incomplete login request");
+        fail(false, tr("Incomplete login request"));
         return 1;
     }
 
@@ -363,7 +369,7 @@ int main()
     const std::vector<std::string> command = strings((*request)["cmd"]);
     const auto owner = account(pam);
     if (command.empty() || !owner) {
-        fail(false, "No command or no account to start");
+        fail(false, tr("No command or no account to start"));
         pam_setcred(pam, PAM_DELETE_CRED);
         return finish(PAM_SESSION_ERR);
     }

@@ -63,6 +63,8 @@ foreach(unit pipewire.socket pipewire.service pipewire-pulse.socket pipewire-pul
             RENAME cutefish-dm.conf)
 endforeach()
 
+cutefish_add_translations(cutefish-dm SOURCES daemon helper)
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
