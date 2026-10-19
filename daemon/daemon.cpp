@@ -1,8 +1,10 @@
 #include "daemon.h"
 
 #include <algorithm>
+#include <fcntl.h>
 #include <filesystem>
 #include <pwd.h>
+#include <unistd.h>
 
 #include "base/event_loop.h"
 #include "base/i18n.h"
@@ -131,7 +133,57 @@ bool Daemon::start()
 
     // A run that ended mid-login may have left it in KD_GRAPHICS with nobody on it.
     restoreTextMode(m_config.sessionVt);
-    startGreeter();
+    if (!autologin())
+        startGreeter();
+    return true;
+}
+
+bool Daemon::autologin()
+{
+    if (m_config.autologinUser.empty())
+        return false;
+
+    // The runtime directory is emptied at boot, so a restarted daemon shows the
+    // login screen instead of logging in again.
+    const std::string marker = m_config.runtimeDirectory + "/autologin";
+    const int fd = open(marker.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0)
+        return false;
+    close(fd);
+
+    const std::string &id = m_config.autologinSession.empty() ? m_config.defaultSession : m_config.autologinSession;
+    const auto entry = findSession(m_config.sessionDirectories, id);
+    if (!entry) {
+        CF_WARNING(base::LogCategory::defaultCategory()) << "No session" << id << "to log in to automatically";
+        return false;
+    }
+
+    PendingStart start;
+    start.command = {DM_SESSION_WRAPPER};
+    start.command.insert(start.command.end(), entry->exec.begin(), entry->exec.end());
+    start.environment = sessionEnvironment(*entry, m_config.sessionVt);
+
+    m_login = std::make_unique<HelperProcess>();
+    auto *login = m_login.get();
+    login->onAuthenticated = [this, id, start = std::move(start)] {
+        m_state.remember(m_login->user(), id);
+        launchSession(start);
+    };
+    login->onFailed = [this, login](bool, const std::string &message) {
+        CF_WARNING(base::LogCategory::defaultCategory()) << "Automatic login:" << message;
+        if (m_login.get() == login) {
+            release(m_login);
+            startGreeter();
+        }
+    };
+    login->onFinished = [this, login] {
+        if (m_login.get() == login) {
+            release(m_login);
+            startGreeter();
+        }
+    };
+
+    login->login(m_config.sessionService, m_config.autologinUser, false, m_config.sessionVt);
     return true;
 }
 
@@ -433,6 +485,10 @@ void Daemon::launchSession(PendingStart start)
                 session->terminate();
                 return;
             }
+
+            // An automatic login takes the display from the boot splash itself.
+            if (std::exchange(m_bootSplash, false))
+                base::Process::startDetached("plymouth", {"quit", "--retain-splash"});
 
             // The timer goes with the login screen it is for.
             if (HelperProcess *greeter = m_greeter.get()) {

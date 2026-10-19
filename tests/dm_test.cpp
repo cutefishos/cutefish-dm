@@ -293,9 +293,12 @@ TEST_F(DisplayManagerTest, ConfigFallsBackToDefaults)
     EXPECT_EQ(defaults.greeterUser, "cutefish-greeter");
     EXPECT_EQ(defaults.greeterCommand, (std::vector<std::string> {"/usr/bin/cutefish-compositor", "--login"}));
 
+    EXPECT_TRUE(defaults.autologinUser.empty());
+
     writeFile(directory.path() + "/dm.conf",
               "[Greeter]\nVt=8\nCommand=/usr/bin/cutefish-compositor --login --no-xwayland\n"
-              "[Session]\nVt=9\nDirectories=/a::/b\n[Daemon]\nRuntimeDirectory=/run/test\n");
+              "[Session]\nVt=9\nDirectories=/a::/b\n[Daemon]\nRuntimeDirectory=/run/test\n"
+              "[Autologin]\nUser=live\nSession=gnome\n");
     const dm::Config config = dm::Config::load(directory.path() + "/dm.conf");
     EXPECT_EQ(config.greeterVt, 8);
     EXPECT_EQ(config.sessionVt, 9);
@@ -303,6 +306,8 @@ TEST_F(DisplayManagerTest, ConfigFallsBackToDefaults)
     EXPECT_EQ(config.sessionDirectories, (std::vector<std::string> {"/a", "/b"}));
     EXPECT_EQ(config.runtimeDirectory, "/run/test");
     EXPECT_EQ(config.greeterUser, "cutefish-greeter");
+    EXPECT_EQ(config.autologinUser, "live");
+    EXPECT_EQ(config.autologinSession, "gnome");
 }
 
 static std::string currentUser()
@@ -621,7 +626,6 @@ protected:
         // The daemon's own D-Bus service is not under test.
         setenv("DBUS_SYSTEM_BUS_ADDRESS", "unix:path=/nonexistent/system_bus_socket", 1);
 
-        dm::Config config;
         config.greeterUser = getpwuid(getuid())->pw_name;
         config.greeterCommand = {"/bin/true"};
         config.sessionDirectories = {directory.path()};
@@ -637,6 +641,14 @@ protected:
         daemon.reset();
         unsetenv(kFakeHelper);
         unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+    }
+
+    // A new daemon with `config`, as after a restart in the same boot.
+    void restart()
+    {
+        daemon.reset();
+        daemon = std::make_unique<dm::Daemon>(config);
+        ASSERT_TRUE(daemon->start());
     }
 
     void request(const Json &message) { greeter.write(dm::encodeFrame(message)); }
@@ -671,6 +683,7 @@ protected:
     }
 
     base::file::TemporaryDirectory directory {"/tmp", "dm-test"};
+    dm::Config config;
     std::unique_ptr<dm::Daemon> daemon;
     base::LocalSocket greeter {g_loop};
     dm::FrameReader reader;
@@ -713,6 +726,35 @@ TEST_F(DaemonTest, ASessionThatFailsToOpenAnswersNoLaterRequest)
     // In flight while the session fails; its answer is the password prompt a second later.
     request(Json::object({{"type", "create_session"}, {"username", "slow"}}));
     EXPECT_EQ(response()["type"].toString(), "auth_message");
+}
+
+TEST_F(DaemonTest, AutologinStartsTheSessionOncePerBoot)
+{
+    writeFile(directory.path() + "/cutefish-wayland.desktop", "[Desktop Entry]\nName=Cutefish\nExec=/bin/sh\n");
+    config.autologinUser = "alice";
+    restart();
+    const auto loggedIn = [&] {
+        return base::file::read(config.statePath).value_or("").find("alice=cutefish-wayland") != std::string::npos;
+    };
+    EXPECT_TRUE(runUntil(loggedIn));
+
+    // The daemon came back in the same boot: the login screen, not another login.
+    std::filesystem::remove(config.statePath);
+    restart();
+    runFor(1s);
+    EXPECT_FALSE(loggedIn());
+}
+
+TEST_F(DaemonTest, AutologinToAMissingSessionLeavesTheLoginScreen)
+{
+    config.autologinUser = "alice";
+    config.autologinSession = "missing";
+    restart();
+    runFor(500ms);
+    EXPECT_FALSE(std::filesystem::exists(config.statePath));
+
+    ASSERT_TRUE(greeter.connectToPath(config.runtimeDirectory + "/greeter.sock"));
+    logIn("alice");
 }
 
 int main(int argc, char **argv)

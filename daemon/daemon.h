@@ -43,6 +43,9 @@ private:
         std::vector<std::string> environment;
     };
 
+    // Starts the configured user's session without the login screen, the first
+    // time this boot; false when there is none to start.
+    bool autologin();
     void startGreeter();
     void showGreeter();
     void stopGreeter();

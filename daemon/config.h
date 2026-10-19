@@ -15,6 +15,10 @@ struct Config {
     std::string sessionService = "cutefish-dm";
     std::vector<std::string> sessionDirectories = {"/usr/local/share/wayland-sessions", "/usr/share/wayland-sessions"};
     std::string defaultSession = "cutefish-wayland";
+    // Logged in without a password once per boot, to `autologinSession` or the
+    // default; nobody when empty.
+    std::string autologinUser;
+    std::string autologinSession;
     std::string statePath = "/var/lib/cutefish-dm/state.conf";
     std::string backgroundDirectory = "/var/lib/cutefish-dm/backgrounds";
     std::string runtimeDirectory = "/run/cutefish-dm";

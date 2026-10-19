@@ -30,6 +30,9 @@ Config Config::load(const std::string &path)
                                                          base::strings::SplitBehavior::SkipEmptyParts);
     config.defaultSession = settings.stringValue("Session/Default", config.defaultSession);
 
+    config.autologinUser = settings.stringValue("Autologin/User", config.autologinUser);
+    config.autologinSession = settings.stringValue("Autologin/Session", config.autologinSession);
+
     config.runtimeDirectory = settings.stringValue("Daemon/RuntimeDirectory", config.runtimeDirectory);
     config.statePath = settings.stringValue("Daemon/StatePath", config.statePath);
 

@@ -29,6 +29,16 @@ sudo systemctl disable sddm
 sudo systemctl enable cutefish-dm
 ```
 
+To log a user in without a password once per boot, as a live system does,
+add to `/etc/cutefish-dm.conf`:
+
+```ini
+[Autologin]
+User=cutefish
+# Optional; the default session otherwise.
+Session=cutefish-wayland
+```
+
 ## Tests
 
 ```shell
