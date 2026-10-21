@@ -4,7 +4,6 @@
 #include <security/pam_appl.h>
 
 #include <cerrno>
-#include <clocale>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +20,7 @@
 #include <vector>
 
 #include "base/i18n.h"
+#include "base/locale.h"
 #include "base/strings.h"
 
 #include "../common/wire.h"
@@ -280,7 +280,7 @@ static std::vector<std::string> strings(const Json &array)
 
 int main()
 {
-    std::setlocale(LC_ALL, "");
+    cutefish::base::Locale::setProcessLocale();
     cutefish::i18n::setDomain("cutefish-dm");
 
     // The daemon's signalfd mask is inherited; without this SIGTERM never lands.
