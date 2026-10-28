@@ -478,6 +478,12 @@ void Daemon::launchSession(PendingStart start)
             if (m_session.get() != session)
                 return;
 
+            // An automatic login takes the display from the boot splash itself.
+            // A deactivated plymouth still holds its VT and never lets it go, so
+            // it has to be gone before the switch to the session's VT.
+            if (controlled && std::exchange(m_bootSplash, false))
+                execute("plymouth", {"quit", "--retain-splash"});
+
             // Never switch to a VT nobody took; end the session instead.
             if (!controlled || !activateSession(id)) {
                 CF_WARNING(base::LogCategory::defaultCategory())
@@ -485,10 +491,6 @@ void Daemon::launchSession(PendingStart start)
                 session->terminate();
                 return;
             }
-
-            // An automatic login takes the display from the boot splash itself.
-            if (std::exchange(m_bootSplash, false))
-                base::Process::startDetached("plymouth", {"quit", "--retain-splash"});
 
             // The timer goes with the login screen it is for.
             if (HelperProcess *greeter = m_greeter.get()) {
