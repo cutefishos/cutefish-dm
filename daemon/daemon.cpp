@@ -479,10 +479,13 @@ void Daemon::launchSession(PendingStart start)
                 return;
 
             // An automatic login takes the display from the boot splash itself.
-            // A deactivated plymouth still holds its VT and never lets it go, so
-            // it has to be gone before the switch to the session's VT.
-            if (controlled && std::exchange(m_bootSplash, false))
+            // A deactivated plymouth never lets its VT go, and once it has quit
+            // with its splash retained the VT stays in KD_GRAPHICS with VT_AUTO,
+            // where the kernel ignores every switch away from it.
+            if (controlled && std::exchange(m_bootSplash, false)) {
                 execute("plymouth", {"quit", "--retain-splash"});
+                restoreTextMode(activeVt());
+            }
 
             // Never switch to a VT nobody took; end the session instead.
             if (!controlled || !activateSession(id)) {
