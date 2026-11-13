@@ -1,0 +1,57 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: cutefish-dm\n"
+"Report-Msgid-Bugs-To: https://github.com/cutefishos\n"
+"POT-Creation-Date: 2026-10-20 01:29+0800\n"
+"PO-Revision-Date: 2026-10-20 01:29+0800\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: zh_TW\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: daemon/daemon.cpp
+msgid "No session is being created"
+msgstr "沒有正在建立的工作階段"
+
+#: daemon/daemon.cpp
+msgid "No authentication message is pending"
+msgstr "沒有待處理的認證訊息"
+
+#: daemon/daemon.cpp
+msgid "Not authenticated"
+msgstr "尚未認證"
+
+#: daemon/daemon.cpp
+msgid "No such session"
+msgstr "沒有這個工作階段"
+
+#: daemon/daemon.cpp
+msgid "Nothing to start"
+msgstr "沒有可啟動的項目"
+
+#: daemon/greeterserver.cpp
+msgid "Unknown request"
+msgstr "不明的要求"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper exited"
+msgstr "登入輔助程式已結束"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper did not start"
+msgstr "登入輔助程式未能啟動"
+
+#: helper/main.cpp
+msgid "Expected a login request"
+msgstr "應為登入要求"
+
+#: helper/main.cpp
+msgid "Incomplete login request"
+msgstr "登入要求不完整"
+
+#: helper/main.cpp
+msgid "No command or no account to start"
+msgstr "沒有要啟動的指令或帳號"

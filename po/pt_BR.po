@@ -1,0 +1,57 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: cutefish-dm\n"
+"Report-Msgid-Bugs-To: https://github.com/cutefishos\n"
+"POT-Creation-Date: 2026-10-20 01:29+0800\n"
+"PO-Revision-Date: 2026-11-13 12:00+0800\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: pt_BR\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#: daemon/daemon.cpp
+msgid "No session is being created"
+msgstr "Nenhuma sessão está sendo criada"
+
+#: daemon/daemon.cpp
+msgid "No authentication message is pending"
+msgstr "Nenhuma mensagem de autenticação pendente"
+
+#: daemon/daemon.cpp
+msgid "Not authenticated"
+msgstr "Não autenticado"
+
+#: daemon/daemon.cpp
+msgid "No such session"
+msgstr "Sessão inexistente"
+
+#: daemon/daemon.cpp
+msgid "Nothing to start"
+msgstr "Nada para iniciar"
+
+#: daemon/greeterserver.cpp
+msgid "Unknown request"
+msgstr "Solicitação desconhecida"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper exited"
+msgstr "O auxiliar de login foi encerrado"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper did not start"
+msgstr "O auxiliar de login não iniciou"
+
+#: helper/main.cpp
+msgid "Expected a login request"
+msgstr "Era esperada uma solicitação de login"
+
+#: helper/main.cpp
+msgid "Incomplete login request"
+msgstr "Solicitação de login incompleta"
+
+#: helper/main.cpp
+msgid "No command or no account to start"
+msgstr "Nenhum comando ou conta para iniciar"

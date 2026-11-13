@@ -1,0 +1,57 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: cutefish-dm\n"
+"Report-Msgid-Bugs-To: https://github.com/cutefishos\n"
+"POT-Creation-Date: 2026-10-20 01:29+0800\n"
+"PO-Revision-Date: 2026-11-13 12:00+0800\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#: daemon/daemon.cpp
+msgid "No session is being created"
+msgstr "Сеанс не создается"
+
+#: daemon/daemon.cpp
+msgid "No authentication message is pending"
+msgstr "Нет ожидающих сообщений аутентификации"
+
+#: daemon/daemon.cpp
+msgid "Not authenticated"
+msgstr "Аутентификация не выполнена"
+
+#: daemon/daemon.cpp
+msgid "No such session"
+msgstr "Такого сеанса нет"
+
+#: daemon/daemon.cpp
+msgid "Nothing to start"
+msgstr "Нечего запускать"
+
+#: daemon/greeterserver.cpp
+msgid "Unknown request"
+msgstr "Неизвестный запрос"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper exited"
+msgstr "Вспомогательная программа входа завершилась"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper did not start"
+msgstr "Вспомогательная программа входа не запустилась"
+
+#: helper/main.cpp
+msgid "Expected a login request"
+msgstr "Ожидался запрос на вход"
+
+#: helper/main.cpp
+msgid "Incomplete login request"
+msgstr "Неполный запрос на вход"
+
+#: helper/main.cpp
+msgid "No command or no account to start"
+msgstr "Не указана команда или учетная запись для запуска"

@@ -1,0 +1,57 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: cutefish-dm\n"
+"Report-Msgid-Bugs-To: https://github.com/cutefishos\n"
+"POT-Creation-Date: 2026-10-20 01:29+0800\n"
+"PO-Revision-Date: 2026-10-20 01:29+0800\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: ko\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: daemon/daemon.cpp
+msgid "No session is being created"
+msgstr "생성 중인 세션이 없습니다"
+
+#: daemon/daemon.cpp
+msgid "No authentication message is pending"
+msgstr "대기 중인 인증 메시지가 없습니다"
+
+#: daemon/daemon.cpp
+msgid "Not authenticated"
+msgstr "인증되지 않았습니다"
+
+#: daemon/daemon.cpp
+msgid "No such session"
+msgstr "해당 세션이 없습니다"
+
+#: daemon/daemon.cpp
+msgid "Nothing to start"
+msgstr "시작할 항목이 없습니다"
+
+#: daemon/greeterserver.cpp
+msgid "Unknown request"
+msgstr "알 수 없는 요청"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper exited"
+msgstr "로그인 도우미가 종료되었습니다"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper did not start"
+msgstr "로그인 도우미가 시작되지 않았습니다"
+
+#: helper/main.cpp
+msgid "Expected a login request"
+msgstr "로그인 요청이 필요합니다"
+
+#: helper/main.cpp
+msgid "Incomplete login request"
+msgstr "불완전한 로그인 요청"
+
+#: helper/main.cpp
+msgid "No command or no account to start"
+msgstr "시작할 명령이나 계정이 없습니다"
