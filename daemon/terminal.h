@@ -16,6 +16,8 @@ void restoreTextMode(int vt);
 bool isControlled(int vt);
 
 int activeVt();
+// Switches the console to `vt`, as Ctrl+Alt+F<vt> would.
+bool activateVt(int vt);
 
 // logind's ActivateSession: the VT switch plus the DRM and input handover.
 bool activateSession(const std::string &sessionId);

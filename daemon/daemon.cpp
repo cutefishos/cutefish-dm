@@ -133,6 +133,7 @@ bool Daemon::start()
 
     // A run that ended mid-login may have left it in KD_GRAPHICS with nobody on it.
     restoreTextMode(m_config.sessionVt);
+    m_vtWatch = std::make_unique<ActiveVtWatch>([this](int vt) { guardTerminal(vt); });
     if (!autologin())
         startGreeter();
     return true;
@@ -350,6 +351,23 @@ void Daemon::setBackgroundPicture(base::dbus::MethodCall &call)
         else
             call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "The picture cannot be copied");
     });
+}
+
+// Nothing reaches one of the display manager's terminals with nothing on it,
+// whatever switched there: a text console's Alt+F1 is the kernel's, out of
+// any compositor's reach.
+void Daemon::guardTerminal(int vt)
+{
+    const bool greeterUp = m_greeter && m_greeter->hasStarted();
+    const bool sessionUp = m_session && m_session->hasStarted();
+    const int target =
+            returnFromEmptyTerminal(vt, m_config.greeterVt, m_config.sessionVt, greeterUp, sessionUp);
+    if (!target)
+        return;
+    CF_INFO(base::LogCategory::defaultCategory())
+            << "Nothing on virtual terminal" << vt << "; back to" << target;
+    if (!activateVt(target))
+        CF_WARNING(base::LogCategory::defaultCategory()) << "Cannot switch to virtual terminal" << target;
 }
 
 void Daemon::setBackgroundColor(base::dbus::MethodCall &call)

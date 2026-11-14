@@ -26,6 +26,7 @@
 #include "daemon/helperprocess.h"
 #include "daemon/sessions.h"
 #include "daemon/state.h"
+#include "daemon/vtguard.h"
 
 using namespace cutefish;
 using namespace std::chrono_literals;
@@ -769,4 +770,27 @@ int main(int argc, char **argv)
     g_loop = &loop;
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+TEST(VtGuardTest, OnlyAnEmptyTerminalOfTheDisplayManagersIsLeft)
+{
+    using dm::returnFromEmptyTerminal;
+    // Signed in, locked or not: the greeter has gone from the first.
+    EXPECT_EQ(returnFromEmptyTerminal(1, 1, 2, false, true), 2);
+    // At the login screen: no session on the second yet.
+    EXPECT_EQ(returnFromEmptyTerminal(2, 1, 2, true, false), 1);
+    // Switching users: both are up and both are fine.
+    EXPECT_EQ(returnFromEmptyTerminal(1, 1, 2, true, true), 0);
+    EXPECT_EQ(returnFromEmptyTerminal(2, 1, 2, true, true), 0);
+    // Where it should be, and text consoles, are left alone.
+    EXPECT_EQ(returnFromEmptyTerminal(2, 1, 2, false, true), 0);
+    EXPECT_EQ(returnFromEmptyTerminal(1, 1, 2, true, false), 0);
+    EXPECT_EQ(returnFromEmptyTerminal(3, 1, 2, false, true), 0);
+    EXPECT_EQ(returnFromEmptyTerminal(4, 1, 2, true, false), 0);
+    // Nothing up at all, as while starting or stopping: nowhere to go.
+    EXPECT_EQ(returnFromEmptyTerminal(1, 1, 2, false, false), 0);
+    EXPECT_EQ(returnFromEmptyTerminal(2, 1, 2, false, false), 0);
+    // Other terminals, as Greeter/Vt and Session/Vt can be set.
+    EXPECT_EQ(returnFromEmptyTerminal(7, 7, 8, false, true), 8);
+    EXPECT_EQ(returnFromEmptyTerminal(0, 1, 2, false, true), 0);
 }

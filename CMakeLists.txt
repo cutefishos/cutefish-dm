@@ -35,6 +35,7 @@ add_executable(cutefish-dm
     daemon/sessions.cpp
     daemon/state.cpp
     daemon/terminal.cpp
+    daemon/vtguard.cpp
 )
 target_compile_definitions(cutefish-dm PRIVATE
     DM_HELPER_PATH="${DM_HELPER_PATH}"

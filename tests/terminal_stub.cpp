@@ -27,6 +27,11 @@ int activeVt()
     return 0;
 }
 
+bool activateVt(int)
+{
+    return true;
+}
+
 bool activateSession(const std::string &)
 {
     return true;

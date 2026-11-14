@@ -58,6 +58,16 @@ bool isControlled(int vt)
     return controlled;
 }
 
+bool activateVt(int vt)
+{
+    const int fd = ::open("/dev/tty0", O_RDWR | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0)
+        return false;
+    const bool switched = ioctl(fd, VT_ACTIVATE, vt) == 0;
+    ::close(fd);
+    return switched;
+}
+
 int activeVt()
 {
     const std::optional<std::string> active = base::file::read("/sys/class/tty/tty0/active");

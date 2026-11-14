@@ -14,6 +14,7 @@
 #include "greeterserver.h"
 #include "helperprocess.h"
 #include "state.h"
+#include "vtguard.h"
 
 namespace dm {
 
@@ -66,6 +67,7 @@ private:
     // then(true) once logind has taken `vt` for the helper's session, then(false)
     // after a timeout; nothing runs once the helper is released.
     void whenControlled(HelperProcess *helper, int vt, std::function<void(bool)> then);
+    void guardTerminal(int vt);
     // HelperProcess objects end in their own callbacks; they are destroyed later.
     void release(std::unique_ptr<HelperProcess> &helper);
 
@@ -78,6 +80,7 @@ private:
     std::unique_ptr<HelperProcess> m_greeter;
     std::unique_ptr<HelperProcess> m_login;
     std::unique_ptr<HelperProcess> m_session;
+    std::unique_ptr<ActiveVtWatch> m_vtWatch;
     std::vector<std::unique_ptr<HelperProcess>> m_released;
     std::optional<PendingStart> m_pendingStart;
     std::vector<cutefish::base::dbus::MethodCall> m_switchRequests;

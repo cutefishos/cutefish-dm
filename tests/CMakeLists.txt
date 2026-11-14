@@ -10,6 +10,7 @@ add_executable(dm-test
     ../daemon/helperprocess.cpp
     ../daemon/sessions.cpp
     ../daemon/state.cpp
+    ../daemon/vtguard.cpp
 )
 target_compile_definitions(dm-test PRIVATE
     DM_HELPER_PATH="/nonexistent/cutefish-dm-helper"
