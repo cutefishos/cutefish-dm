@@ -4,6 +4,7 @@ add_executable(dm-test
     dm_test.cpp
     terminal_stub.cpp
     ../daemon/backgrounds.cpp
+    ../daemon/displays.cpp
     ../daemon/config.cpp
     ../daemon/daemon.cpp
     ../daemon/greeterserver.cpp

@@ -20,6 +20,7 @@
 
 #include "common/wire.h"
 #include "daemon/backgrounds.h"
+#include "daemon/displays.h"
 #include "daemon/config.h"
 #include "daemon/daemon.h"
 #include "daemon/greeterserver.h"
@@ -421,6 +422,59 @@ TEST_F(DisplayManagerTest, BackgroundsOfRemovedUsersAreDropped)
     EXPECT_NE(access((path + "/no-such-user-dm-test.conf").c_str(), F_OK), 0);
     EXPECT_NE(access((path + "/no-such-user-dm-test.picture").c_str(), F_OK), 0);
     EXPECT_NE(access((path + "/" + user + ".picture.7").c_str(), F_OK), 0);
+}
+
+TEST_F(DisplayManagerTest, DisplaysKeepTheUsersConfiguration)
+{
+    const std::string user = currentUser();
+    dm::Displays displays(directory.path() + "/displays");
+    const std::string json = R"({"monitors":{"edid:ab":{"mode":{"refreshMilliHz":239972}}},"version":1})";
+    writeFile(directory.path() + "/display.json", json);
+    const base::dbus::UnixFd file = openForReading(directory.path() + "/display.json");
+    EXPECT_TRUE(displays.set(user, file.fd()));
+    EXPECT_EQ(base::file::read(displays.path(user)).value_or(""), json);
+
+    // A newer one replaces it.
+    writeFile(directory.path() + "/display.json", "{}");
+    EXPECT_TRUE(displays.set(user, openForReading(directory.path() + "/display.json").fd()));
+    EXPECT_EQ(base::file::read(displays.path(user)).value_or(""), "{}");
+}
+
+TEST_F(DisplayManagerTest, DisplaysRefuseWhatIsNotAConfiguration)
+{
+    const std::string user = currentUser();
+    dm::Displays displays(directory.path() + "/displays");
+    const auto refused = [&](const std::string &contents) {
+        writeFile(directory.path() + "/display.json", contents);
+        return !displays.set(user, openForReading(directory.path() + "/display.json").fd());
+    };
+    EXPECT_TRUE(refused(""));
+    EXPECT_TRUE(refused("not json"));
+    EXPECT_TRUE(refused("[1, 2]"));
+    EXPECT_TRUE(refused(std::string(dm::Displays::kMaximumSize + 1, ' ')));
+    EXPECT_FALSE(displays.set(user, openForReading(directory.path()).fd()));
+    int pipeFds[2];
+    ASSERT_EQ(pipe(pipeFds), 0);
+    close(pipeFds[1]);
+    EXPECT_FALSE(displays.set(user, pipeFds[0]));
+    close(pipeFds[0]);
+    EXPECT_NE(access(displays.path(user).c_str(), F_OK), 0);
+}
+
+TEST_F(DisplayManagerTest, DisplaysOfRemovedUsersAreDropped)
+{
+    const std::string user = currentUser();
+    const std::string path = directory.path() + "/displays";
+    dm::Displays displays(path);
+    writeFile(directory.path() + "/display.json", "{}");
+    ASSERT_TRUE(displays.set(user, openForReading(directory.path() + "/display.json").fd()));
+    writeFile(path + "/no-such-user-dm-test.json", "{}");
+    writeFile(path + "/stray", "");
+
+    displays.removeStale();
+    EXPECT_EQ(access(displays.path(user).c_str(), F_OK), 0);
+    EXPECT_NE(access((path + "/no-such-user-dm-test.json").c_str(), F_OK), 0);
+    EXPECT_NE(access((path + "/stray").c_str(), F_OK), 0);
 }
 
 TEST(ConfigTest, CommandsSplitAsTheConfigurationAlwaysHas)

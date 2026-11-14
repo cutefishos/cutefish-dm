@@ -63,6 +63,7 @@ Daemon::Daemon(Config config)
     : m_config(std::move(config))
     , m_state(m_config.statePath)
     , m_backgrounds(m_config.backgroundDirectory)
+    , m_displays(m_config.displayDirectory)
 {
     m_greeterRestart.setSingleShot(true);
     m_greeterRestart.onTimeout = [this] { startGreeter(); };
@@ -119,6 +120,8 @@ bool Daemon::start()
                             [this](base::dbus::MethodCall &call) { setBackgroundPicture(call); });
         m_object->addMethod("SetBackgroundColor", "s", "",
                             [this](base::dbus::MethodCall &call) { setBackgroundColor(call); });
+        m_object->addMethod("SetDisplayConfiguration", "h", "",
+                            [this](base::dbus::MethodCall &call) { setDisplayConfiguration(call); });
     }
     if (!m_bus || !m_object->publish() || !m_bus->requestName("org.cutefish.DisplayManager"))
         CF_WARNING(base::LogCategory::defaultCategory())
@@ -130,6 +133,7 @@ bool Daemon::start()
     }
 
     m_backgrounds.removeStale();
+    m_displays.removeStale();
 
     // A run that ended mid-login may have left it in KD_GRAPHICS with nobody on it.
     restoreTextMode(m_config.sessionVt);
@@ -365,6 +369,24 @@ void Daemon::setBackgroundColor(base::dbus::MethodCall &call)
         call.reply();
     else
         call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Not a colour that can be stored");
+}
+
+void Daemon::setDisplayConfiguration(base::dbus::MethodCall &call)
+{
+    base::dbus::UnixFd file;
+    if (!call.read(file) || !file.isValid()) {
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Expected the configuration's file descriptor");
+        return;
+    }
+
+    const std::string user = callerName(call);
+    if (user.empty())
+        return;
+
+    if (m_displays.set(user, file.fd()))
+        call.reply();
+    else
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Not a display configuration that can be kept");
 }
 
 void Daemon::createSession(const std::string &username)
