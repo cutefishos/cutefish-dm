@@ -263,6 +263,9 @@ TEST(SessionTest, EnvironmentsCarryWhatPamSystemdReads)
     EXPECT_TRUE(contains(greeter, "XDG_SESSION_CLASS=greeter"));
     EXPECT_TRUE(contains(greeter, "XDG_VTNR=1"));
     EXPECT_TRUE(contains(greeter, "GREETD_SOCK=/run/x.sock"));
+
+    EXPECT_EQ(dm::terminalsVariable(1, 2), "CUTEFISH_DM_VTS=1,2");
+    EXPECT_EQ(dm::terminalsVariable(7, 8), "CUTEFISH_DM_VTS=7,8");
 }
 
 TEST_F(DisplayManagerTest, StateRemembersTheLastLogin)

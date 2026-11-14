@@ -26,5 +26,10 @@ std::optional<SessionEntry> findSession(const std::vector<std::string> &director
 // For pam_systemd, set before pam_open_session (sddm's Display::startAuth).
 std::vector<std::string> sessionEnvironment(const SessionEntry &session, int vt);
 std::vector<std::string> greeterEnvironment(int vt, const std::string &socket);
+// CUTEFISH_DM_VTS: the terminals of the greeter and of the sessions, for the
+// compositors in both to keep a switch from landing on one with nothing on
+// it (a console signed in on the sessions' terminal keeps the next login
+// from starting there).
+std::string terminalsVariable(int greeterVt, int sessionVt);
 
 } // namespace dm

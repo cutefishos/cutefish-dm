@@ -162,6 +162,7 @@ bool Daemon::autologin()
     start.command = {DM_SESSION_WRAPPER};
     start.command.insert(start.command.end(), entry->exec.begin(), entry->exec.end());
     start.environment = sessionEnvironment(*entry, m_config.sessionVt);
+    start.environment.push_back(terminalsVariable(m_config.greeterVt, m_config.sessionVt));
 
     m_login = std::make_unique<HelperProcess>();
     auto *login = m_login.get();
@@ -199,7 +200,9 @@ void Daemon::startGreeter()
 
     m_greeter = std::make_unique<HelperProcess>();
     m_greeter->onAuthenticated = [this] {
-        m_greeter->start(m_config.greeterCommand, greeterEnvironment(m_config.greeterVt, m_server.path()));
+        std::vector<std::string> environment = greeterEnvironment(m_config.greeterVt, m_server.path());
+        environment.push_back(terminalsVariable(m_config.greeterVt, m_config.sessionVt));
+        m_greeter->start(m_config.greeterCommand, environment);
     };
     m_greeter->onStarted = [this](const std::string &) {
         if (std::exchange(m_bootSplash, false))
@@ -427,12 +430,14 @@ void Daemon::startSession(const std::vector<std::string> &command, const std::ve
         start.command.insert(start.command.end(), entry->exec.begin(), entry->exec.end());
         const auto variables = sessionEnvironment(*entry, m_config.sessionVt);
         start.environment.insert(start.environment.end(), variables.begin(), variables.end());
+        start.environment.push_back(terminalsVariable(m_config.greeterVt, m_config.sessionVt));
         m_state.remember(m_login->user(), session);
     } else if (!command.empty()) {
         start.command = {DM_SESSION_WRAPPER};
         start.command.insert(start.command.end(), command.begin(), command.end());
         const auto variables = sessionEnvironment(SessionEntry {}, m_config.sessionVt);
         start.environment.insert(start.environment.end(), variables.begin(), variables.end());
+        start.environment.push_back(terminalsVariable(m_config.greeterVt, m_config.sessionVt));
     } else {
         m_server.respond(GreeterServer::error(false, tr("Nothing to start")));
         return;

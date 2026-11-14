@@ -196,6 +196,11 @@ std::vector<std::string> sessionEnvironment(const SessionEntry &session, int vt)
     return environment;
 }
 
+std::string terminalsVariable(int greeterVt, int sessionVt)
+{
+    return "CUTEFISH_DM_VTS=" + std::to_string(greeterVt) + "," + std::to_string(sessionVt);
+}
+
 std::vector<std::string> greeterEnvironment(int vt, const std::string &socket)
 {
     return {
