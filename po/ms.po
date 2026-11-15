@@ -1,0 +1,56 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: cutefish-dm\n"
+"Report-Msgid-Bugs-To: https://github.com/cutefishos\n"
+"POT-Creation-Date: 2026-10-20 01:29+0800\n"
+"PO-Revision-Date: 2026-10-20 01:29+0800\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: ms\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: daemon/daemon.cpp
+msgid "No session is being created"
+msgstr "Tiada sesi sedang dicipta"
+
+#: daemon/daemon.cpp
+msgid "No authentication message is pending"
+msgstr "Tiada mesej pengesahan yang belum selesai"
+
+#: daemon/daemon.cpp
+msgid "Not authenticated"
+msgstr "Tidak disahkan"
+
+#: daemon/daemon.cpp
+msgid "No such session"
+msgstr "Tiada sesi sedemikian"
+
+#: daemon/daemon.cpp
+msgid "Nothing to start"
+msgstr "Tiada apa-apa untuk dimulakan"
+
+#: daemon/greeterserver.cpp
+msgid "Unknown request"
+msgstr "Permintaan tidak diketahui"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper exited"
+msgstr "Pembantu log masuk telah keluar"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper did not start"
+msgstr "Pembantu log masuk tidak bermula"
+
+#: helper/main.cpp
+msgid "Expected a login request"
+msgstr "Permintaan log masuk dijangkakan"
+
+#: helper/main.cpp
+msgid "Incomplete login request"
+msgstr "Permintaan log masuk tidak lengkap"
+
+#: helper/main.cpp
+msgid "No command or no account to start"
+msgstr "Tiada arahan atau akaun untuk dimulakan"

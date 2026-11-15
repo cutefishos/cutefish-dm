@@ -1,0 +1,57 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: cutefish-dm\n"
+"Report-Msgid-Bugs-To: https://github.com/cutefishos\n"
+"POT-Creation-Date: 2026-10-20 01:29+0800\n"
+"PO-Revision-Date: 2026-10-20 01:29+0800\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: cs\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1) ? 0 : (n>=2 && n<=4) ? 1 : 2;\n"
+
+#: daemon/daemon.cpp
+msgid "No session is being created"
+msgstr "Nevytváří se žádná relace"
+
+#: daemon/daemon.cpp
+msgid "No authentication message is pending"
+msgstr "Nečeká žádná ověřovací zpráva"
+
+#: daemon/daemon.cpp
+msgid "Not authenticated"
+msgstr "Neověřeno"
+
+#: daemon/daemon.cpp
+msgid "No such session"
+msgstr "Taková relace neexistuje"
+
+#: daemon/daemon.cpp
+msgid "Nothing to start"
+msgstr "Není co spustit"
+
+#: daemon/greeterserver.cpp
+msgid "Unknown request"
+msgstr "Neznámý požadavek"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper exited"
+msgstr "Pomocník přihlášení skončil"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper did not start"
+msgstr "Pomocník přihlášení se nespustil"
+
+#: helper/main.cpp
+msgid "Expected a login request"
+msgstr "Očekáván požadavek na přihlášení"
+
+#: helper/main.cpp
+msgid "Incomplete login request"
+msgstr "Neúplný požadavek na přihlášení"
+
+#: helper/main.cpp
+msgid "No command or no account to start"
+msgstr "Chybí příkaz nebo účet ke spuštění"

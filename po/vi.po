@@ -1,0 +1,57 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: cutefish-dm\n"
+"Report-Msgid-Bugs-To: https://github.com/cutefishos\n"
+"POT-Creation-Date: 2026-10-20 01:29+0800\n"
+"PO-Revision-Date: 2026-10-20 01:29+0800\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: vi\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: daemon/daemon.cpp
+msgid "No session is being created"
+msgstr "Không có phiên nào đang được tạo"
+
+#: daemon/daemon.cpp
+msgid "No authentication message is pending"
+msgstr "Không có thông báo xác thực nào đang chờ"
+
+#: daemon/daemon.cpp
+msgid "Not authenticated"
+msgstr "Chưa xác thực"
+
+#: daemon/daemon.cpp
+msgid "No such session"
+msgstr "Không có phiên này"
+
+#: daemon/daemon.cpp
+msgid "Nothing to start"
+msgstr "Không có gì để khởi động"
+
+#: daemon/greeterserver.cpp
+msgid "Unknown request"
+msgstr "Yêu cầu không xác định"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper exited"
+msgstr "Trình trợ giúp đăng nhập đã thoát"
+
+#: daemon/helperprocess.cpp
+msgid "The login helper did not start"
+msgstr "Trình trợ giúp đăng nhập không khởi động được"
+
+#: helper/main.cpp
+msgid "Expected a login request"
+msgstr "Cần một yêu cầu đăng nhập"
+
+#: helper/main.cpp
+msgid "Incomplete login request"
+msgstr "Yêu cầu đăng nhập không đầy đủ"
+
+#: helper/main.cpp
+msgid "No command or no account to start"
+msgstr "Không có lệnh hoặc tài khoản để khởi động"
