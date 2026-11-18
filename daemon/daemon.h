@@ -41,11 +41,14 @@ private:
     struct PendingStart {
         std::vector<std::string> command;
         std::vector<std::string> environment;
+        bool autologin = false;
     };
 
     // Starts the configured user's session without the login screen, the first
     // time this boot; false when there is none to start.
     bool autologin();
+    // The same without the once-per-boot check.
+    bool startAutologin();
     void startGreeter();
     void showGreeter();
     void stopGreeter();
@@ -88,6 +91,9 @@ private:
     // The login screen has handed a login over and cannot take another.
     bool m_greeterSpent = false;
     bool m_restartGreeter = false;
+    // The automatic login's session stayed up long enough to log in again
+    // once it ends.
+    bool m_relogin = false;
     bool m_bootSplash = false;
     bool m_stopping = false;
     std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);

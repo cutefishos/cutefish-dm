@@ -19,6 +19,9 @@ struct Config {
     // default; nobody when empty.
     std::string autologinUser;
     std::string autologinSession;
+    // The automatic login again whenever its session ends, rather than the
+    // login screen; for the live medium, whose user knows no password.
+    bool autologinRelogin = false;
     std::string statePath = "/var/lib/cutefish-dm/state.conf";
     std::string backgroundDirectory = "/var/lib/cutefish-dm/backgrounds";
     std::string runtimeDirectory = "/run/cutefish-dm";

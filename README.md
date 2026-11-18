@@ -37,6 +37,9 @@ add to `/etc/cutefish-dm.conf`:
 User=cutefish
 # Optional; the default session otherwise.
 Session=cutefish-wayland
+# Optional: log the user in again whenever the session ends, unless it ended
+# within five seconds of being shown.
+Relogin=true
 ```
 
 ## Tests

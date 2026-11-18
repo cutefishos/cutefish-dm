@@ -32,6 +32,7 @@ Config Config::load(const std::string &path)
 
     config.autologinUser = settings.stringValue("Autologin/User", config.autologinUser);
     config.autologinSession = settings.stringValue("Autologin/Session", config.autologinSession);
+    config.autologinRelogin = settings.boolValue("Autologin/Relogin", config.autologinRelogin);
 
     config.runtimeDirectory = settings.stringValue("Daemon/RuntimeDirectory", config.runtimeDirectory);
     config.statePath = settings.stringValue("Daemon/StatePath", config.statePath);

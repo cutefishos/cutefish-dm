@@ -35,7 +35,8 @@ using dm::Json;
 // runs until terminated, or, set to "stubborn", ignores SIGTERM, or, set to
 // "linger", ends half a second after it. User "slow" is asked for a password
 // only after a second; a session command holding "--fail-open" fails to open
-// after 300 ms, as when pam_open_session does.
+// after 300 ms, as when pam_open_session does; one holding "--end-after=N"
+// ends by itself N milliseconds after it started.
 static constexpr char kFakeHelper[] = "DM_TEST_FAKE_HELPER";
 
 static base::EventLoop *g_loop = nullptr;
@@ -85,7 +86,10 @@ static int fakeHelper(const char *mode)
     if (!start || !(*start)["cmd"].isArray() || (*start)["cmd"].toArray().empty())
         return 0;
 
+    int endAfter = -1;
     for (const Json &argument : (*start)["cmd"].toArray()) {
+        if (argument.toString().starts_with("--end-after="))
+            endAfter = std::stoi(argument.toString().substr(std::strlen("--end-after=")));
         if (argument.toString() == "--fail-open") {
             usleep(300 * 1000);
             writeLine(Json::object({{"type", "error"}, {"auth", false}, {"message", "Cannot open session"}}));
@@ -100,6 +104,10 @@ static int fakeHelper(const char *mode)
 
     writeLine(Json::object({{"type", "started"}, {"pid", int64_t(getpid())}, {"session", "42"}}));
 
+    if (endAfter >= 0) {
+        usleep(useconds_t(endAfter) * 1000);
+        return 0;
+    }
     while (!g_terminated)
         pause();
     usleep(500 * 1000);
@@ -294,11 +302,12 @@ TEST_F(DisplayManagerTest, ConfigFallsBackToDefaults)
     EXPECT_EQ(defaults.greeterCommand, (std::vector<std::string> {"/usr/bin/cutefish-compositor", "--login"}));
 
     EXPECT_TRUE(defaults.autologinUser.empty());
+    EXPECT_FALSE(defaults.autologinRelogin);
 
     writeFile(directory.path() + "/dm.conf",
               "[Greeter]\nVt=8\nCommand=/usr/bin/cutefish-compositor --login --no-xwayland\n"
               "[Session]\nVt=9\nDirectories=/a::/b\n[Daemon]\nRuntimeDirectory=/run/test\n"
-              "[Autologin]\nUser=live\nSession=gnome\n");
+              "[Autologin]\nUser=live\nSession=gnome\nRelogin=true\n");
     const dm::Config config = dm::Config::load(directory.path() + "/dm.conf");
     EXPECT_EQ(config.greeterVt, 8);
     EXPECT_EQ(config.sessionVt, 9);
@@ -308,6 +317,7 @@ TEST_F(DisplayManagerTest, ConfigFallsBackToDefaults)
     EXPECT_EQ(config.greeterUser, "cutefish-greeter");
     EXPECT_EQ(config.autologinUser, "live");
     EXPECT_EQ(config.autologinSession, "gnome");
+    EXPECT_TRUE(config.autologinRelogin);
 }
 
 static std::string currentUser()
@@ -743,6 +753,59 @@ TEST_F(DaemonTest, AutologinStartsTheSessionOncePerBoot)
     restart();
     runFor(1s);
     EXPECT_FALSE(loggedIn());
+}
+
+// An automatic login whose session ends by itself.
+class AutologinTest : public DaemonTest
+{
+protected:
+    void startWith(int sessionMs, bool relogin)
+    {
+        writeFile(directory.path() + "/cutefish-wayland.desktop",
+                  "[Desktop Entry]\nName=Cutefish\nExec=/bin/sh --end-after=" + std::to_string(sessionMs) + "\n");
+        config.autologinUser = "alice";
+        config.autologinRelogin = relogin;
+        restart();
+    }
+
+    // Whether the automatic login has logged in since the last call.
+    bool loggedIn()
+    {
+        const bool written = base::file::read(config.statePath).value_or("").find("alice=cutefish-wayland")
+                != std::string::npos;
+        if (written)
+            std::filesystem::remove(config.statePath);
+        return written;
+    }
+};
+
+TEST_F(AutologinTest, WithoutReloginTheLoginScreenFollowsTheSession)
+{
+    startWith(6000, false);
+    ASSERT_TRUE(runUntil([&] { return loggedIn(); }));
+    runFor(7500ms);
+    EXPECT_FALSE(loggedIn());
+
+    ASSERT_TRUE(greeter.connectToPath(config.runtimeDirectory + "/greeter.sock"));
+    logIn("alice");
+}
+
+TEST_F(AutologinTest, WithReloginTheUserIsLoggedInAgainWhenTheSessionEnds)
+{
+    startWith(6000, true);
+    ASSERT_TRUE(runUntil([&] { return loggedIn(); }));
+    EXPECT_TRUE(runUntil([&] { return loggedIn(); }, 9s));
+}
+
+TEST_F(AutologinTest, ASessionThatEndsAtOnceIsNotLoggedInAgain)
+{
+    startWith(300, true);
+    ASSERT_TRUE(runUntil([&] { return loggedIn(); }));
+    runFor(2s);
+    EXPECT_FALSE(loggedIn());
+
+    ASSERT_TRUE(greeter.connectToPath(config.runtimeDirectory + "/greeter.sock"));
+    logIn("alice");
 }
 
 TEST_F(DaemonTest, AutologinToAMissingSessionLeavesTheLoginScreen)

@@ -28,6 +28,10 @@ static constexpr int kControlPollMs = 20;
 // its cursor down with it, and the session's replaces it once its displays settle.
 static constexpr int kGreeterLingerMs = 3000;
 
+// How long an automatic login's session has to stay on screen to be logged in
+// again when it ends; one that cannot start falls back to the login screen.
+static constexpr int kReloginAfterMs = 5000;
+
 static std::optional<uid_t> uidOf(const std::string &user)
 {
     const passwd *entry = getpwnam(user.c_str());
@@ -150,7 +154,11 @@ bool Daemon::autologin()
     if (fd < 0)
         return false;
     close(fd);
+    return startAutologin();
+}
 
+bool Daemon::startAutologin()
+{
     const std::string &id = m_config.autologinSession.empty() ? m_config.defaultSession : m_config.autologinSession;
     const auto entry = findSession(m_config.sessionDirectories, id);
     if (!entry) {
@@ -162,6 +170,7 @@ bool Daemon::autologin()
     start.command = {DM_SESSION_WRAPPER};
     start.command.insert(start.command.end(), entry->exec.begin(), entry->exec.end());
     start.environment = sessionEnvironment(*entry, m_config.sessionVt);
+    start.autologin = true;
 
     m_login = std::make_unique<HelperProcess>();
     auto *login = m_login.get();
@@ -473,8 +482,9 @@ void Daemon::launchSession(PendingStart start)
     session->onFailed = [](bool, const std::string &message) {
         CF_WARNING(base::LogCategory::defaultCategory()) << "Session:" << message;
     };
-    session->onStarted = [this, session](const std::string &id) {
-        whenControlled(session, m_config.sessionVt, [this, session, id](bool controlled) {
+    const bool relogin = start.autologin && m_config.autologinRelogin;
+    session->onStarted = [this, session, relogin](const std::string &id) {
+        whenControlled(session, m_config.sessionVt, [this, session, id, relogin](bool controlled) {
             if (m_session.get() != session)
                 return;
 
@@ -493,6 +503,17 @@ void Daemon::launchSession(PendingStart start)
                         << "Cannot switch to the session on VT" << m_config.sessionVt << "- ending it";
                 session->terminate();
                 return;
+            }
+
+            // The timer goes with the session, so one that ends sooner is not logged in again.
+            if (relogin) {
+                base::Timer *settled = session->addTimer();
+                settled->setSingleShot(true);
+                settled->onTimeout = [this, session] {
+                    if (session == m_session.get())
+                        m_relogin = true;
+                };
+                settled->start(std::chrono::milliseconds(kReloginAfterMs));
             }
 
             // The timer goes with the login screen it is for.
@@ -516,6 +537,7 @@ void Daemon::onSessionFinished()
 {
     release(m_session);
     restoreTextMode(m_config.sessionVt);
+    const bool relogin = std::exchange(m_relogin, false);
     if (m_stopping)
         return;
 
@@ -524,6 +546,9 @@ void Daemon::onSessionFinished()
         launchSession(std::move(*pending));
         return;
     }
+
+    if (relogin && startAutologin())
+        return;
 
     // A crash, another desktop's own logout, or a session that failed before
     // it was shown: the login screen comes back.
