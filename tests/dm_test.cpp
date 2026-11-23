@@ -433,6 +433,31 @@ TEST_F(DisplayManagerTest, BackgroundsOfRemovedUsersAreDropped)
     EXPECT_NE(access((path + "/" + user + ".picture.7").c_str(), F_OK), 0);
 }
 
+TEST_F(DisplayManagerTest, BackgroundsKeepTheUsersLanguage)
+{
+    const std::string user = currentUser();
+    dm::Backgrounds backgrounds(directory.path() + "/backgrounds");
+    EXPECT_TRUE(backgrounds.setColor(user, "#112233"));
+    EXPECT_TRUE(backgrounds.setLanguage(
+            user, {{"LANG", "zh_TW.UTF-8"}, {"LANGUAGE", "zh_TW:en_US"}, {"LC_TIME", "zh_TW.UTF-8"}, {"LC_ALL", ""}}));
+
+    base::Settings saved(backgrounds.settingsPath(user));
+    EXPECT_EQ(saved.stringValue("Appearance/BackgroundColor"), "#112233");
+    EXPECT_EQ(saved.stringValue("Language/LANG"), "zh_TW.UTF-8");
+    EXPECT_EQ(saved.stringValue("Language/LANGUAGE"), "zh_TW:en_US");
+    EXPECT_EQ(saved.stringValue("Language/LC_TIME"), "zh_TW.UTF-8");
+    EXPECT_FALSE(saved.contains("Language/LC_ALL"));
+
+    EXPECT_TRUE(backgrounds.setLanguage(user, {{"LANG", "en_US.UTF-8"}}));
+    base::Settings updated(backgrounds.settingsPath(user));
+    EXPECT_EQ(updated.stringValue("Language/LANG"), "en_US.UTF-8");
+    EXPECT_FALSE(updated.contains("Language/LANGUAGE"));
+    EXPECT_FALSE(updated.contains("Language/LC_TIME"));
+
+    EXPECT_FALSE(backgrounds.setLanguage(user, {{"PATH", "/tmp"}}));
+    EXPECT_FALSE(backgrounds.setLanguage(user, {{"LANG", "zh_TW.UTF-8\nEvil=1"}}));
+}
+
 TEST(ConfigTest, CommandsSplitAsTheConfigurationAlwaysHas)
 {
     EXPECT_EQ(dm::splitCommand("a  b\tc"), (std::vector<std::string> {"a", "b", "c"}));

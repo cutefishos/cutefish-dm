@@ -123,6 +123,8 @@ bool Daemon::start()
                             [this](base::dbus::MethodCall &call) { setBackgroundPicture(call); });
         m_object->addMethod("SetBackgroundColor", "s", "",
                             [this](base::dbus::MethodCall &call) { setBackgroundColor(call); });
+        m_object->addMethod("SetLanguage", "a{ss}", "",
+                            [this](base::dbus::MethodCall &call) { setLanguage(call); });
     }
     if (!m_bus || !m_object->publish() || !m_bus->requestName("org.cutefish.DisplayManager"))
         CF_WARNING(base::LogCategory::defaultCategory())
@@ -374,6 +376,24 @@ void Daemon::setBackgroundColor(base::dbus::MethodCall &call)
         call.reply();
     else
         call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Not a colour that can be stored");
+}
+
+void Daemon::setLanguage(base::dbus::MethodCall &call)
+{
+    std::map<std::string, std::string> environment;
+    if (!call.read(environment)) {
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Expected language variables");
+        return;
+    }
+
+    const std::string user = callerName(call);
+    if (user.empty())
+        return;
+
+    if (m_backgrounds.setLanguage(user, environment))
+        call.reply();
+    else
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Not a language environment that can be stored");
 }
 
 void Daemon::createSession(const std::string &username)

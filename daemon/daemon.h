@@ -36,6 +36,9 @@ public:
     // the caller's own desktop background, for the login screen to show.
     void setBackgroundPicture(cutefish::base::dbus::MethodCall &call);
     void setBackgroundColor(cutefish::base::dbus::MethodCall &call);
+    // org.cutefish.DisplayManager.SetLanguage: the caller's locale environment,
+    // for the login screen to follow.
+    void setLanguage(cutefish::base::dbus::MethodCall &call);
 
 private:
     struct PendingStart {

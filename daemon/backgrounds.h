@@ -34,6 +34,8 @@ public:
     void setPicture(const std::string &user, cutefish::base::dbus::UnixFd file, std::function<void(bool)> done);
     // #RGB, #RRGGBB or #AARRGGBB.
     bool setColor(const std::string &user, const std::string &color);
+    // Locale environment variables (LANG, LANGUAGE, LC_*) for the login screen.
+    bool setLanguage(const std::string &user, const std::map<std::string, std::string> &environment);
 
     std::string settingsPath(const std::string &user) const;
     std::string picturePath(const std::string &user) const;

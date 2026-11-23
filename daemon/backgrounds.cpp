@@ -3,6 +3,8 @@
 
 #include "backgrounds.h"
 
+#include <algorithm>
+#include <array>
 #include <cerrno>
 #include <filesystem>
 #include <optional>
@@ -20,6 +22,25 @@ namespace dm {
 
 static constexpr std::string_view kSettingsSuffix = ".conf";
 static constexpr std::string_view kPictureSuffix = ".picture";
+
+static constexpr std::array<std::string_view, 14> kLanguageKeys = {
+    "LANG",       "LANGUAGE",   "LC_CTYPE",    "LC_NUMERIC", "LC_TIME",
+    "LC_COLLATE", "LC_MONETARY", "LC_MESSAGES", "LC_PAPER",   "LC_NAME",
+    "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT", "LC_IDENTIFICATION",
+};
+
+static bool isLanguageKey(std::string_view name)
+{
+    return name == "LC_ALL"
+            || std::find(kLanguageKeys.begin(), kLanguageKeys.end(), name) != kLanguageKeys.end();
+}
+
+static bool isLanguageValue(std::string_view value)
+{
+    if (value.size() > 256)
+        return false;
+    return std::all_of(value.begin(), value.end(), [](unsigned char c) { return c >= 0x20 && c != 0x7f; });
+}
 
 static bool userExists(const std::string &user)
 {
@@ -141,6 +162,25 @@ bool Backgrounds::setColor(const std::string &user, const std::string &color)
     base::Settings settings(settingsPath(user));
     settings.setValue("Appearance/BackgroundType", 1);
     settings.setValue("Appearance/BackgroundColor", color);
+    return settings.sync();
+}
+
+bool Backgrounds::setLanguage(const std::string &user, const std::map<std::string, std::string> &environment)
+{
+    for (const auto &[name, value] : environment) {
+        if (!isLanguageKey(name) || !isLanguageValue(value))
+            return false;
+    }
+
+    base::Settings settings(settingsPath(user));
+    for (const std::string_view key : kLanguageKeys) {
+        const std::string path = "Language/" + std::string(key);
+        const auto found = environment.find(std::string(key));
+        if (found != environment.end() && !found->second.empty())
+            settings.setValue(path, found->second);
+        else
+            settings.remove(path);
+    }
     return settings.sync();
 }
 
